@@ -6,108 +6,81 @@ import yt_dlp
 
 logging.basicConfig(level=logging.INFO)
 
-def fetch_transcript(video_id: str, lang_code: str = 'en') -> str:
-    """Fetch YouTube transcript with fallback and translation logic."""
+def fetch_transcript(video_id: str, lang_code: str = 'en') -> Optional[str]:
+    """Fetch YouTube transcript with comprehensive error handling."""
     try:
         transcript_list = YouTubeTranscriptApi.list_transcripts(video_id)
         
-        # 1. Try requested language (manual first, then auto)
-        if lang_code in transcript_list._manually_created_transcripts:
-            transcript = transcript_list.find_manually_created_transcript([lang_code])
-            logging.info(f"Found manual {lang_code} transcript")
-            return format_transcript(transcript.fetch())
-            
-        if lang_code in transcript_list._generated_transcripts:
-            transcript = transcript_list.find_generated_transcript([lang_code])
-            logging.info(f"Found auto-generated {lang_code} transcript")
-            return format_transcript(transcript.fetch())
+        # Attempt 1: Direct transcript fetch
+        try:
+            transcript = YouTubeTranscriptApi.get_transcript(
+                video_id, 
+                languages=[lang_code, 'en'],
+                preserve_formatting=True
+            )
+            return JSONFormatter().format_transcript(transcript)
+        except (TranscriptsDisabled, NoTranscriptFound):
+            pass
 
-        # 2. Fallback to English (manual first, then auto)
-        if lang_code != 'en':
-            if 'en' in transcript_list._manually_created_transcripts:
-                transcript = transcript_list.find_manually_created_transcript(['en'])
-                logging.info("Found manual English transcript")
-                return format_transcript(transcript.fetch())
-                
-            if 'en' in transcript_list._generated_transcripts:
-                transcript = transcript_list.find_generated_transcript(['en'])
-                logging.info("Found auto-generated English transcript")
-                return format_transcript(transcript.fetch())
+        # Attempt 2: Auto-generated transcripts
+        try:
+            generated = transcript_list.find_generated_transcript([lang_code, 'en'])
+            return JSONFormatter().format_transcript(generated.fetch())
+        except Exception as e:
+            logging.debug(f"No auto-generated transcript: {str(e)}")
 
-        # 3. Fallback to any available transcript (manual first, then auto)
-        if transcript_list._manually_created_transcripts:
-            transcript = next(iter(transcript_list._manually_created_transcripts.values()))
-            logging.info(f"Found manual transcript in {transcript.language_code}")
-            if transcript.language_code != lang_code:
-                translated = attempt_translation(transcript, lang_code)
-                if translated:
-                    return translated
-                else:
-                    logging.info(f"Returning manual transcript in {transcript.language_code}")
-                    return format_transcript(transcript.fetch())
-            else:
-                return format_transcript(transcript.fetch())
-            
-        if transcript_list._generated_transcripts:
-            transcript = next(iter(transcript_list._generated_transcripts.values()))
-            logging.info(f"Found auto-generated transcript in {transcript.language_code}")
-            if transcript.language_code != lang_code:
-                translated = attempt_translation(transcript, lang_code)
-                if translated:
-                    return translated
-                else:
-                    logging.info(f"Returning auto-generated transcript in {transcript.language_code}")
-                    return format_transcript(transcript.fetch())
-            else:
-                return format_transcript(transcript.fetch())
+        # Attempt 3: Any available transcript
+        try:
+            transcript = transcript_list.find_transcript(['*'])
+            return JSONFormatter().format_transcript(transcript.fetch())
+        except Exception as e:
+            logging.debug(f"No available transcripts: {str(e)}")
 
-        # 4. Final fallback to yt-dlp
+        # Final fallback to yt-dlp
         return fetch_transcript_yt_dlp(video_id, lang_code)
 
+    except TranscriptsDisabled:
+        logging.warning(f"Subtitles disabled for video {video_id}")
+        return None
+    except NoTranscriptFound:
+        logging.warning(f"No transcript found for video {video_id}")
+        return None
     except Exception as e:
-        logging.error(f"Error: {str(e)}")
+        logging.error(f"Unexpected error fetching transcript: {str(e)}")
         return None
 
-def attempt_translation(transcript, target_lang):
-    """Attempts to translate the transcript to the target language. Returns formatted transcript if successful, else None."""
-    try:
-        if not transcript.is_translatable:
-            logging.warning(f"Transcript in {transcript.language_code} is not translatable.")
-            return None
-
-        available_langs = [tl['language_code'] for tl in transcript.translation_languages]
-        if target_lang not in available_langs:
-            logging.warning(f"Translation to {target_lang} not available. Available languages: {available_langs}")
-            return None
-
-        translated_transcript = transcript.translate(target_lang)
-        logging.info(f"Translated transcript from {transcript.language_code} to {target_lang}")
-        return format_transcript(translated_transcript.fetch())
-    except Exception as e:
-        logging.error(f"Translation failed: {str(e)}")
-        return None
-
-def fetch_transcript_yt_dlp(video_id: str, lang_code: str) -> str:
-    """Fallback transcript fetch using yt-dlp."""
+def fetch_transcript_yt_dlp(video_id: str, lang_code: str) -> Optional[str]:
+    """Fallback transcript fetch using yt-dlp with improved error handling."""
     try:
         ydl_opts = {
             'writesubtitles': True,
-            'subtitleslangs': [lang_code, 'en'],
+            'subtitleslangs': [lang_code, 'en', 'a.en', 'a.*'],
             'skip_download': True,
-            'quiet': True
+            'quiet': True,
+            'ignoreerrors': True
         }
         
         with yt_dlp.YoutubeDL(ydl_opts) as ydl:
             info = ydl.extract_info(f"https://youtu.be/{video_id}", download=False)
             
-            # Try requested language first, then English
+            if not info or 'subtitles' not in info:
+                return None
+
+            # Check for both manual and auto-generated subtitles
             for lang in [lang_code, 'en']:
-                if info.get('subtitles') and lang in info['subtitles']:
-                    subs = info['subtitles'][lang][0]['data']
-                    logging.info(f"Found {lang} subtitles via yt-dlp")
-                    return JSONFormatter().format_transcript(subs)
+                for sub_type in ['', 'a.']:
+                    key = f"{sub_type}{lang}"
+                    if key in info['subtitles']:
+                        subs = info['subtitles'][key][0]['data']
+                        return JSONFormatter().format_transcript([
+                            {
+                                'text': entry['text'],
+                                'start': entry['start'],
+                                'duration': entry['end'] - entry['start']
+                            } for entry in subs
+                        ])
             
-            logging.error("No subtitles found via any method")
+            logging.warning(f"No suitable subtitles found via yt-dlp for {video_id}")
             return None
 
     except Exception as e:
