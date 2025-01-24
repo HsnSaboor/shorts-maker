@@ -42,15 +42,17 @@ class BulkProcessor:
                     raise ValueError(f"❌ Video download failed for {video_id}")
                 self.logger.info(f"✅ Successfully downloaded video to: {video_path}")
 
-                # Stage 3: Transcript processing
+                    # Stage 2: Transcript processing
                 self.logger.info(f"📝 Fetching transcript for {video_id}")
                 transcript_json = fetch_transcript(video_id, lang)
-                if not transcript_json:
-                    raise ValueError("❌ Failed to fetch transcript")
-                self.logger.debug(f"📄 Raw transcript received for {video_id}")
                 
-                transcript = json.loads(transcript_json)
-                self.logger.info(f"📊 Processed transcript with {len(transcript)} entries")
+                if not transcript_json:
+                    self.logger.warning(f"📭 Skipping video {video_id} - no transcript available")
+                    return {
+                        'video_id': video_id,
+                        'status': 'skipped',
+                        'reason': 'No transcript available'
+                    }
 
                 # Stage 4: Heatmap analysis
                 self.logger.info(f"🌡️ Analyzing heatmap for {video_id}")
