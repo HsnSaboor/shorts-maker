@@ -2,7 +2,7 @@ import asyncio
 import json
 import logging
 from pathlib import Path
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Any
 from youtube_search import get_playlist_video_ids, get_channel_video_ids
 from transcript_utils import save_clip_transcripts, extract_clip_transcripts
 from transcript import fetch_transcript
