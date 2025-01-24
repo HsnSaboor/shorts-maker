@@ -8,7 +8,7 @@ libharfbuzz0b
 libxml2
 libxslt1.1
 libopencv-dev
-tesseract-ocr
+libwebpdemux2
 libjpeg-dev
 zlib1g-dev
 libvpx6
