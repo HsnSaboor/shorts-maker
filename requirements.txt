@@ -1,6 +1,6 @@
 streamlit
 playwright
 lxml
-urllib
-requests
-youtube_transcript_api
+youtube-transcript-api
+yt-dlp
+youtubesearchpython
