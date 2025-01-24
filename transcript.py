@@ -3,6 +3,7 @@ import logging
 from youtube_transcript_api import YouTubeTranscriptApi, TranscriptsDisabled, NoTranscriptFound
 from youtube_transcript_api.formatters import JSONFormatter
 import yt_dlp
+from typing import Optional, List, Dict
 
 logging.basicConfig(level=logging.INFO)
 
