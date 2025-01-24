@@ -3,4 +3,4 @@ playwright
 lxml
 youtube-transcript-api
 yt-dlp
-youtubesearchpython
+youtube-search-python
