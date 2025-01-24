@@ -1,4 +1,4 @@
-tesseract-ocr
+ffmpeg
 libxslt1.1
 libx11-6
 libwoff1
@@ -31,7 +31,6 @@ libgles2
 libx264-dev
 libc6
 libnss3
-neofetch
 libnspr4
 libcups2
 libdrm2
