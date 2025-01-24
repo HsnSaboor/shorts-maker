@@ -5,7 +5,7 @@ import json
 import logging
 import zipfile
 from pathlib import Path
-from typing import List, Dict, Optional
+from typing import List, Dict, Optional, Callable
 import shutil
 import os
 
