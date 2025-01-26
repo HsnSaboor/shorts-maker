@@ -30,7 +30,6 @@ def download_video(video_id: str, progress_callback: Optional[Callable] = None) 
     '--concurrent-fragments', '64',
     '--http-chunk-size', '64M',
     '--no-simulate',
-    '--no-playlist',
     '-o', str(output_path),
     f'https://www.youtube.com/watch?v={video_id}'
 ]
