@@ -4,28 +4,20 @@ from youtubesearchpython import Playlist, ChannelsSearch, VideosSearch
 
 logging.basicConfig(level=logging.INFO)
 
+# youtube_search.py - Add better error recovery
 def get_playlist_video_ids(playlist_link: str) -> Optional[List[str]]:
-    """
-    Get all video IDs from a YouTube playlist.
-    
-    Args:
-        playlist_link: URL or ID of the YouTube playlist
-        
-    Returns:
-        List of video IDs or None if failed
-    """
     try:
-        logging.info(f"Fetching videos from playlist: {playlist_link}")
         playlist = Playlist(playlist_link)
-        
-        # Load all pages of the playlist
-        while playlist.hasMoreVideos:
-            playlist.getNextVideos()
-        
-        return [video['id'] for video in playlist.videos]
-    
+        while True:
+            try:
+                if not playlist.hasMoreVideos:
+                    break
+                playlist.getNextVideos()
+            except:
+                break  # Handle API limitations
+        return [video['id'] for video in playlist.videos if 'id' in video]
     except Exception as e:
-        logging.error(f"Failed to get playlist videos: {str(e)}")
+        logging.error(f"Playlist failed: {str(e)}")
         return None
 
 def get_channel_video_ids(channel_identifier: str, limit: int = 10) -> Optional[List[str]]:
