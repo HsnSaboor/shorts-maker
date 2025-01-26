@@ -36,7 +36,7 @@ def download_video(video_id: str, progress_callback: Optional[Callable] = None) 
             '--concurrent-fragments', '256',  # Max allowed fragments
             '--http-chunk-size', '200M',      # Larger chunks for big videos
             '--downloader', 'aria2c',
-            '--downloader-args', 'aria2c:-x 128 -s 256 -k 500M -j 128 --file-allocation=falloc --optimize-concurrent-downloads=true',
+            '--downloader-args', 'aria2c:-x 64 -s 256 -k 500M -j 64 --file-allocation=falloc --optimize-concurrent-downloads=true',
             
             # Live stream enhancements
             '--live-from-start',
