@@ -4,4 +4,3 @@ lxml
 youtube-transcript-api
 yt-dlp
 youtube-search-python
-humanize
