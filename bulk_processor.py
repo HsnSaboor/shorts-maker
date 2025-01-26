@@ -2,74 +2,24 @@ import asyncio
 import json
 import logging
 from pathlib import Path
-from typing import List, Dict, Optional
-from youtube_search import get_playlist_video_ids, get_channel_video_ids
-from transcript_utils import save_clip_transcripts, extract_clip_transcripts
-from transcript import fetch_transcript
-from heatmap import process_video
+from typing import List, Dict, Optional, Callable, Awaitable
 from video_downloader import download_video
-from video_splitter import cut_video_into_clips
+from transcript_utils import save_clip_transcripts, extract_clip_transcripts
 
 class BulkProcessor:
-    def __init__(self, concurrency: int = 4):
+    def __init__(self, 
+                 concurrency: int = 4,
+                 progress_callback: Optional[Callable[[str, int, int], Awaitable[None]]] = None):
         self.semaphore = asyncio.Semaphore(concurrency)
+        self.progress_callback = progress_callback
         self.logger = logging.getLogger(__name__)
-        self.progress = 0
-        
-    async def _process_single_video(self, video_id: str, output_dir: str, lang: str) -> Optional[Dict]:
-        async with self.semaphore:
-            try:
-                self.logger.info(f"🚀 Starting processing for {video_id}")
-                video_dir = Path(output_dir) / video_id
-                video_dir.mkdir(parents=True, exist_ok=True)
 
-                # 1. Download video
-                self.logger.info(f"⬇️ Downloading {video_id}")
-                video_path = download_video(video_id)
-                if not video_path or not Path(video_path).exists():
-                    raise ValueError(f"❌ Download failed: {video_id}")
-
-                # 2. Get transcript
-                self.logger.info(f"📄 Fetching transcript for {video_id}")
-                transcript_json = fetch_transcript(video_id, lang)
-                if not transcript_json:
-                    raise ValueError("📭 No transcript available")
-                transcript = json.loads(transcript_json)
-
-                # 3. Analyze content
-                self.logger.info(f"🌡️ Analyzing heatmap for {video_id}")
-                clips = await process_video(video_id)
-
-                # 4. Process clips
-                valid_clips = [c for c in clips if c['end'] > c['start']][:10]
-                if not valid_clips:
-                    raise ValueError("🎬 No valid clips generated")
-                
-                processed_clips = extract_clip_transcripts(transcript, valid_clips)
-                clip_dir = video_dir / "clips"
-                clip_paths = cut_video_into_clips(video_path, valid_clips, str(clip_dir))
-
-                # 5. Save results
-                transcript_path = video_dir / "clip_transcripts.json"
-                save_clip_transcripts(processed_clips, str(transcript_path))
-                self.logger.info(f"✅ Successfully processed {video_id}")
-
-                return {
-                    'video_id': video_id,
-                    'status': 'success',
-                    'clips': len(clip_paths),
-                    'clip_dir': str(clip_dir),
-                    'transcript_path': str(transcript_path),
-                    'metadata': valid_clips
-                }
-
-            except Exception as e:
-                self.logger.error(f"❌ Error processing {video_id}: {str(e)}")
-                return {
-                    'video_id': video_id,
-                    'status': 'failed',
-                    'error': str(e)
-                }
+    async def _process_single_video(self, 
+                                  video_id: str, 
+                                  output_dir: str, 
+                                  lang: str,
+                                  total_videos: int,
+                          
 
     async def process_sources(self, sources: List[str], lang: str, output_dir: str) -> Dict:
         video_ids = await self._resolve_sources(sources)
