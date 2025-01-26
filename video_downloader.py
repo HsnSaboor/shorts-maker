@@ -28,7 +28,7 @@ def download_video(video_id: str, progress_callback: Optional[Callable] = None) 
             '--concurrent-fragments', '256',
             '--http-chunk-size', '300M',
             '-o', str(base_path) + '_video.%(ext)s',
-            '--progress-template', 'download:%(progress.downloaded_bytes)s/%(progress.total_bytes)s|%(progress._percent_str)s|%(progress.speed)s|%(progress._eta_str)s',
+            '--progress',
             f'https://www.youtube.com/watch?v={video_id}'
         ]
 
@@ -37,7 +37,7 @@ def download_video(video_id: str, progress_callback: Optional[Callable] = None) 
             '-f', 'bestaudio[ext=m4a]',
             '--concurrent-fragments', '8',
             '-o', str(base_path) + '_audio.%(ext)s',
-            '--progress-template', 'download:%(progress.downloaded_bytes)s/%(progress.total_bytes)s|%(progress._percent_str)s|%(progress.speed)s|%(progress._eta_str)s',
+            '--progress',
             f'https://www.youtube.com/watch?v={video_id}'
         ]
 
@@ -59,51 +59,52 @@ def download_video(video_id: str, progress_callback: Optional[Callable] = None) 
                         break
                     line = line.strip()
                     if line:  # Log any non-empty output
-                        if line.startswith('download:'):
+                        if '/' in line and '|' in line and '%' in line:
                             try:
-                                # Parse the progress information
-                                parts = line.split('|')
-                                bytes_info = parts[0].split(':')[1]
-                                downloaded, total = bytes_info.split('/')
-                                percent = parts[1].strip()
-                                speed = parts[2]
-                                eta = parts[3]
+                                # Parse the progress information (format: bytes/total| percent|speed|eta)
+                                parts = line.strip().split('|')
+                                if len(parts) >= 4:
+                                    bytes_info = parts[0]
+                                    downloaded, total = bytes_info.split('/')
+                                    percent = parts[1].strip()
+                                    speed = parts[2]
+                                    eta = parts[3]
 
-                                # Format bytes to appropriate unit
-                                def format_size(bytes_size):
-                                    if bytes_size == 'NA':
-                                        return '0 MB'
-                                    bytes_num = float(bytes_size)
-                                    if bytes_num >= 1024 * 1024 * 1024:  # GB
-                                        return f"{bytes_num / 1024 / 1024 / 1024:.2f} GB"
-                                    else:  # MB
-                                        return f"{bytes_num / 1024 / 1024:.2f} MB"
+                                    # Format bytes to appropriate unit
+                                    def format_size(bytes_size):
+                                        if bytes_size == 'NA':
+                                            return '0 MB'
+                                        bytes_num = float(bytes_size)
+                                        if bytes_num >= 1024 * 1024 * 1024:  # GB
+                                            return f"{bytes_num / 1024 / 1024 / 1024:.2f} GB"
+                                        else:  # MB
+                                            return f"{bytes_num / 1024 / 1024:.2f} MB"
 
-                                def format_speed(speed_str):
-                                    if speed_str == 'NA':
-                                        return 'NA'
-                                    speed_num = float(speed_str)
-                                    if speed_num >= 1024 * 1024 * 1024:  # GB/s
-                                        return f"{speed_num / 1024 / 1024 / 1024:.2f} GB/s"
-                                    else:  # MB/s
-                                        return f"{speed_num / 1024 / 1024:.2f} MB/s"
+                                    def format_speed(speed_str):
+                                        if speed_str == 'NA':
+                                            return 'NA'
+                                        speed_num = float(speed_str)
+                                        if speed_num >= 1024 * 1024:  # Convert to MB/s
+                                            return f"{speed_num / 1024 / 1024:.2f} MB/s"
+                                        else:  # KB/s
+                                            return f"{speed_num / 1024:.2f} KB/s"
 
-                                # Format the values
-                                downloaded_str = format_size(downloaded)
-                                total_str = format_size(total)
-                                speed_formatted = format_speed(speed)
+                                    # Format values
+                                    downloaded_str = format_size(downloaded)
+                                    total_str = format_size(total)
+                                    speed_formatted = format_speed(speed)
 
-                                # Create progress message
-                                progress_msg = f"📥 Progress: {percent} ({downloaded_str} / {total_str}) at {speed_formatted} ETA: {eta}"
-                                logger.info(progress_msg)
+                                    # Create user-friendly progress message
+                                    progress_msg = f"📥 Progress: {percent} ({downloaded_str} / {total_str}) at {speed_formatted} ETA: {eta}"
+                                    print(progress_msg, flush=True)
 
-                                # Update progress callback
-                                if progress_callback:
-                                    try:
-                                        percent_value = float(percent.rstrip('%'))
-                                        progress_callback("download", percent_value)
-                                    except ValueError:
-                                        pass
+                                    # Update progress callback
+                                    if progress_callback:
+                                        try:
+                                            percent_value = float(percent.rstrip('%'))
+                                            progress_callback("download", percent_value)
+                                        except ValueError:
+                                            pass
                             except (ValueError, IndexError) as e:
                                 logger.debug(f"Error parsing progress: {e}")
                         else:
