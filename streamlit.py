@@ -1,14 +1,13 @@
 import streamlit as st
 import asyncio
-import json
 import logging
 import zipfile
 import os
 from pathlib import Path
-from typing import List, Dict, Optional
+from typing import List, Dict
 from bulk_processor import BulkProcessor
 
-# Configure logging to show in Streamlit
+# Configure logging
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
@@ -16,17 +15,23 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+class SessionStateHandler(logging.Handler):
+    def emit(self, record):
+        log_entry = self.format(record)
+        if 'logs' not in st.session_state:
+            st.session_state.logs = []
+        st.session_state.logs.append(log_entry)
 
-os.system("playwright install")
-
-def ensure_directory(path: str) -> Path:
-    """Create directory if it doesn't exist"""
-    path_obj = Path(path)
-    path_obj.mkdir(parents=True, exist_ok=True)
-    return path_obj
+def format_size(size_bytes: int) -> str:
+    """Convert bytes to human-readable format"""
+    for unit in ['B', 'KB', 'MB', 'GB']:
+        if size_bytes < 1024:
+            return f"{size_bytes:.2f} {unit}"
+        size_bytes /= 1024
+    return f"{size_bytes:.2f} GB"
 
 def create_zip(output_dir: str) -> str:
-    """Create ZIP archive with size tracking"""
+    """Create ZIP archive with progress tracking"""
     zip_path = os.path.join(output_dir, "clips_with_transcripts.zip")
     total_size = 0
     
@@ -39,49 +44,24 @@ def create_zip(output_dir: str) -> str:
                     zipf.write(file_path, relative_path)
                     file_size = os.path.getsize(file_path)
                     total_size += file_size
-                    logger.info(f"📦 Added {relative_path} ({format_size(file_size)})")
-    
-    if total_size == 0:
-        logger.error("❌ Empty ZIP archive created")
-        return None
+                    logger.info(f"Added {relative_path} ({format_size(file_size)})")
     
     zip_size = os.path.getsize(zip_path)
-    logger.info(f"✅ ZIP creation complete. Total size: {format_size(zip_size)}")
+    logger.info(f"ZIP created: {format_size(zip_size)}")
     return zip_path
 
-def format_size(size_bytes: int) -> str:
-    """Convert bytes to human-readable format without external dependencies"""
-    units = ["B", "KB", "MB", "GB", "TB"]
-    unit_index = 0
-    while size_bytes >= 1024 and unit_index < len(units)-1:
-        size_bytes /= 1024
-        unit_index += 1
-    return f"{size_bytes:.2f} {units[unit_index]}"
-
-def display_logs():
-    """Show processing logs in Streamlit"""
-    if st.session_state.get('logs'):
-        with st.expander("Processing Logs"):
-            st.code("\n".join(st.session_state.logs))
-
-# Add this custom handler before your main function
-class SessionStateLogHandler(logging.Handler):
-    def emit(self, record):
-        log_entry = self.format(record)
-        if 'logs' in st.session_state:
-            st.session_state.logs.append(log_entry)
-
 def main():
-    st.title("YouTube Bulk Video Clipper")
-    st.markdown("Extract high-attention clips with transcripts from multiple YouTube videos")
+    st.title("YouTube Bulk Video Processor")
     
-    # Session state initialization
+    # Initialize session state
     if 'processing' not in st.session_state:
         st.session_state.processing = False
-    if 'results' not in st.session_state:
-        st.session_state.results = None
-    if 'zip_path' not in st.session_state:
-        st.session_state.zip_path = None
+    if 'progress' not in st.session_state:
+        st.session_state.progress = {
+            'total': 0,
+            'steps': {},
+            'zip': False
+        }
     if 'logs' not in st.session_state:
         st.session_state.logs = []
 
@@ -89,8 +69,8 @@ def main():
     with st.sidebar:
         st.header("Settings")
         lang = st.text_input("Language Code", "en")
-        concurrency = st.slider("Concurrency", 1, 8, 4)
-        output_dir = st.text_input("Output Directory", "bulk_output")
+        concurrency = st.slider("Concurrency Level", 1, 8, 4)
+        output_dir = st.text_input("Output Directory", "processed_videos")
         process_btn = st.button("Start Processing")
 
     # Main interface
@@ -98,19 +78,15 @@ def main():
     
     with col1:
         st.subheader("Input Sources")
-        text_input = st.text_input("Enter video IDs/URLs (comma-separated):")
+        text_input = st.text_input("Enter YouTube URLs/IDs (comma-separated):")
         uploaded_file = st.file_uploader("Or upload text file", type=["txt"])
 
+    # Processing controls
     if process_btn and not st.session_state.processing:
         st.session_state.processing = True
         st.session_state.logs = []
-        
-        # Configure logging to UI
-        handler = SessionStateLogHandler()
-        handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
-        logging.getLogger().addHandler(handler)
-        
         sources = []
+        
         if uploaded_file:
             sources += uploaded_file.read().decode().splitlines()
         if text_input:
@@ -122,113 +98,87 @@ def main():
             st.session_state.processing = False
             return
 
-        try:
-            # Setup directories
-            output_path = ensure_directory(output_dir)
-            processor = BulkProcessor(concurrency=concurrency)
-            
-            # Progress tracking
-            progress_bar = st.progress(0)
-            status_text = st.empty()
-            
-            async def run_processing():
-                results = await processor.process_sources(sources, lang, str(output_path))
-                
-                # Final steps
-                status_text.info("📦 Packaging results...")
-                zip_path = create_zip(output_dir)
-                st.session_state.zip_path = zip_path
-                st.session_state.results = results
-                return results
+        # Setup progress tracking
+        st.session_state.progress = {
+            'total': 0,
+            'steps': {},
+            'zip': False
+        }
 
-            results = asyncio.run(run_processing())
-            
-            # Create ZIP archive
-            zip_path = create_zip(output_dir)
-            st.session_state.zip_path = zip_path
-            st.session_state.results = results
-            
-            # Final update
-            progress_bar.progress(100)
-            status_text.success("✅ Processing complete!")
-            
+        # Add custom logging handler
+        log_handler = SessionStateHandler()
+        log_handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+        logging.getLogger().addHandler(log_handler)
+
+        try:
+            async def process_wrapper():
+                processor = BulkProcessor(
+                    concurrency=concurrency,
+                    progress_callback=update_progress
+                )
+                results = await processor.process_sources(sources, lang, output_dir)
+                zip_path = await asyncio.to_thread(create_zip, output_dir)
+                st.session_state.progress['zip'] = True
+                st.session_state.results = results
+                st.session_state.zip_path = zip_path
+
+            async def update_progress(step_type: str, index: int, progress: float):
+                """Update progress for individual video steps"""
+                if step_type not in st.session_state.progress['steps']:
+                    st.session_state.progress['steps'][step_type] = {}
+                st.session_state.progress['steps'][step_type][index] = progress
+                st.experimental_rerun()
+
+            asyncio.run(process_wrapper())
+
         except Exception as e:
             logger.error(f"Processing failed: {str(e)}")
             st.error(f"Processing failed: {str(e)}")
         finally:
-            logging.getLogger().removeHandler(handler)
+            logging.getLogger().removeHandler(log_handler)
             st.session_state.processing = False
 
-    # Results display
-    if st.session_state.results:
-        with col2:
-            st.subheader("Summary")
-            res = st.session_state.results
-            st.metric("Total Videos", res['total_processed'])
-            st.metric("Successful", res['success_count'])
-            st.metric("Failed", res['failure_count'])
-            st.metric("Success Rate", f"{res['success_rate']:.1f}%")
-            
-            if st.session_state.zip_path:
-                zip_size = os.path.getsize(st.session_state.zip_path)
-                st.metric("ZIP File Size", zip_size)
-                with open(st.session_state.zip_path, "rb") as f:
-                    st.download_button(
-                        "📥 Download All",
-                        data=f,
-                        file_name="clips_with_transcripts.zip",
-                        mime="application/zip"
-                    )
+    # Display progress
+    if st.session_state.progress['total'] > 0:
+        st.subheader("Processing Progress")
+        
+        # Individual step progress
+        steps = ['download', 'transcript', 'heatmap', 'clips']
+        cols = st.columns(len(steps))
+        for idx, step in enumerate(steps):
+            with cols[idx]:
+                current = sum(1 for v in st.session_state.progress['steps'].get(step, {}).values() if v >= 100)
+                total = st.session_state.progress['total']
+                progress = current / total if total > 0 else 0
+                st.progress(
+                    progress,
+                    text=f"📊 {step.capitalize()}\n({current}/{total} videos)"
+                )
 
-        st.subheader("Generated Clips")
-        for success in st.session_state.results['success']:
-            video_dir = Path(success['clip_dir'])
-            transcript_path = video_dir.parent / "clip_transcripts.json"
-            
-            with open(transcript_path) as f:
-                transcripts = json.load(f)
-            
-            clips = list(video_dir.glob("*.mp4"))
-            st.markdown(f"### Video ID: `{success['video_id']}`")
-            
-            cols = st.columns(3)
-            for idx, (clip_path, transcript) in enumerate(zip(clips, transcripts)):
-                with cols[idx % 3]:
-                    # Clip metadata
-                    start = transcript['start']
-                    end = transcript['end']
-                    duration = end - start
-                    attention = transcript.get('average_attention', 'N/A')
-                    
-                    # Display card
-                    with st.container(border=True):
-                        st.video(str(clip_path))
-                        st.caption(f"⏱️ {start:.1f}s - {end:.1f}s ({duration:.1f}s)")
-                        st.caption(f"📈 Average Attention: {attention}%")
-                        
-                        # Download buttons
-                        with open(clip_path, "rb") as f:
-                            st.download_button(
-                                f"📥 Clip {idx+1}",
-                                data=f,
-                                file_name=clip_path.name,
-                                mime="video/mp4",
-                                key=f"clip_{idx}"
-                            )
-                        
-                        transcript_text = "\n".join(
-                            [f"{t['start']:.1f}s: {t['text']}" for t in transcript['transcript']]
-                        )
-                        st.download_button(
-                            f"📝 Transcript {idx+1}",
-                            data=transcript_text,
-                            file_name=f"transcript_{idx+1}.txt",
-                            mime="text/plain",
-                            key=f"trans_{idx}"
-                        )
+        # ZIP packaging
+        st.progress(
+            1.0 if st.session_state.progress['zip'] else 0,
+            text="📦 ZIP Packaging: " + ("Done" if st.session_state.progress['zip'] else "Pending")
+        )
 
     # Display logs
-    display_logs()
+    if st.session_state.logs:
+        with st.expander("Processing Logs"):
+            st.code("\n".join(st.session_state.logs[-50:]))
+
+    # Results display and download
+    if st.session_state.get('zip_path'):
+        st.subheader("Results")
+        zip_size = format_size(os.path.getsize(st.session_state.zip_path))
+        st.metric("Final ZIP Size", zip_size)
+        
+        with open(st.session_state.zip_path, "rb") as f:
+            st.download_button(
+                "📥 Download All Clips",
+                data=f,
+                file_name="clips_with_transcripts.zip",
+                mime="application/zip"
+            )
 
 if __name__ == "__main__":
     main()
