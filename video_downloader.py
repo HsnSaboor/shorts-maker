@@ -37,23 +37,17 @@ def download_video(video_id: str, progress_callback: Optional[Callable] = None) 
             '--http-chunk-size', '200M',      # Larger chunks for big videos
             '--downloader', 'aria2c',
             '--downloader-args', 'aria2c:-x 64 -s 256 -k 500M -j 64 --file-allocation=falloc --optimize-concurrent-downloads=true',
-            
-
-            '--hls-use-mpegts',               # Better live stream handling
-            
             # Performance tweaks
             '--no-part',                      # Avoid partial files
             '--throttled-rate', '100M',       # Skip throttled fragments
             '--retries', 'infinite',
             '--fragment-retries', 'infinite',
             '--buffered-fragments', '256',    # Keep more in memory
-            
             # Network optimizations
             '--socket-timeout', '60',
             '--source-address', '0.0.0.0',    # Bypass connection limits
             '--force-ipv4',
             '--limit-rate', '0',              # No rate limiting
-            
             # Output control
             '-o', f'{output_path}.%(ext)s',
             '--no-simulate',
