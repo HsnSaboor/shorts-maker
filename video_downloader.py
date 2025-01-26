@@ -54,8 +54,15 @@ def download_video(video_id: str, progress_callback: Optional[Callable] = None) 
                     line = line.strip()
                     if "[download]" in line and "%" in line:
                         progress = line.split("[download]")[1].strip()
-                        # Log progress
-                        logger.info(f"📥 Download Progress: {progress}")
+                        # Log progress and update UI
+                        line = f"📥 Download Progress: {progress}"
+                        logger.info(line)
+                        if progress_callback:
+                            try:
+                                percent = float(progress.split('%')[0].strip())
+                                progress_callback("download", percent)
+                            except ValueError:
+                                pass
                         if progress_callback:
                             try:
                                 percent = float(progress.split('%')[0].strip())
