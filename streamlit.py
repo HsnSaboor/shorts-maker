@@ -71,13 +71,6 @@ def create_zip(temp_dir):
 
 def main():
     st.title("YouTube Bulk Video Clipper")
-    
-    # Install Playwright dependencies
-    if not st.session_state.get('playwright_installed', False):
-        with st.spinner("Installing dependencies..."):
-            os.system("playwright install")
-            os.system("playwright install-deps")
-            st.session_state.playwright_installed = True
 
     # Sidebar controls
     with st.sidebar:
@@ -183,11 +176,6 @@ def main():
                 file_name="video_clips.zip",
                 mime="application/zip"
             )
-
-    # Show log messages
-    st.header("Processing Logs")
-    if st.session_state.log_messages:
-        st.code("\n".join(st.session_state.log_messages[-20:]), language="plaintext")
-
+   
 if __name__ == "__main__":
     main()
