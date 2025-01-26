@@ -1,8 +1,8 @@
 import os
 import tempfile
 import zipfile
+import io
 from pathlib import Path
-from typing import List, Dict
 import logging
 
 logger = logging.getLogger(__name__)
@@ -10,8 +10,7 @@ logger = logging.getLogger(__name__)
 class DirectoryManager:
     def __init__(self):
         self.temp_dir = None
-        self.clip_data = []
-
+        
     def create_temp_dir(self) -> str:
         """Create and return a temporary directory"""
         self.temp_dir = tempfile.TemporaryDirectory()
@@ -20,12 +19,17 @@ class DirectoryManager:
 
     def get_clip_dir(self, video_id: str) -> Path:
         """Get directory path for a video's clips"""
+        if not self.temp_dir:
+            raise ValueError("Temporary directory not initialized")
         path = Path(self.temp_dir.name) / video_id / "clips"
         path.mkdir(parents=True, exist_ok=True)
         return path
 
     def create_zip(self) -> bytes:
         """Create ZIP file from processed files"""
+        if not self.temp_dir:
+            raise ValueError("Temporary directory not initialized")
+            
         zip_buffer = io.BytesIO()
         try:
             with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
@@ -38,6 +42,7 @@ class DirectoryManager:
                             logger.info(f"Added to ZIP: {arcname}")
         except Exception as e:
             logger.error(f"ZIP creation failed: {str(e)}")
+            raise
         return zip_buffer.getvalue()
 
     def cleanup(self):
