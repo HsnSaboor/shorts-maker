@@ -1,64 +1,50 @@
-# video_downloader.py
-import os
-import re
+import asyncio
 import subprocess
 import logging
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Optional, Tuple, Callable
 
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
-)
 logger = logging.getLogger(__name__)
 
-def _download_with_retry(command: list, stream_type: str, progress_callback: callable, max_retries: int = 3) -> Path:
-    """Download with retry mechanism"""
-    for attempt in range(max_retries):
-        try:
-            process = subprocess.Popen(
-                command,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                universal_newlines=True
-            )
+async def download_video(video_id: str, 
+                       progress_callback: Optional[Callable[[str, float], None]] = None) -> Optional[str]:
+    """Async video download with proper progress handling"""
+    try:
+        output_dir = Path("temp_videos")
+        output_dir.mkdir(exist_ok=True)
+        final_file = output_dir / f"{video_id}.mp4"
 
-            progress_pattern = re.compile(r'(\d+\.\d+)%')
-            for line in process.stdout:
-                if progress_callback and (match := progress_pattern.search(line)):
-                    progress_callback(stream_type, float(match.group(1)))
+        if final_file.exists():
+            logger.info(f"Using cached video: {final_file}")
+            return str(final_file)
 
-            process.wait()
-            if process.returncode == 0:
-                output_file = Path(command[-2].replace('%(ext)s', 'mp4' if stream_type == 'video' else 'm4a'))
-                if output_file.exists():
-                    return output_file
-                raise FileNotFoundError(f"Output file missing: {output_file}")
+        # Run download in executor
+        loop = asyncio.get_running_loop()
+        video_file, audio_file = await loop.run_in_executor(
+            None, 
+            lambda: _download_streams(video_id, progress_callback)
+        )
 
-            raise subprocess.CalledProcessError(
-                process.returncode, 
-                command, 
-                output=process.stdout.read()
-            )
+        # Merge streams
+        return await loop.run_in_executor(
+            None,
+            lambda: _merge_streams(video_id, video_file, audio_file, final_file)
+        )
 
-        except Exception as e:
-            if attempt == max_retries - 1:
-                raise RuntimeError(
-                    f"Failed after {max_retries} attempts: {str(e)}"
-                ) from e
-            logger.warning(f"Retrying {stream_type} download (attempt {attempt + 1})...")
+    except Exception as e:
+        logger.error(f"Download failed: {str(e)}")
+        return None
 
-def _download_streams(video_id: str, progress_callback: callable) -> Tuple[Path, Path]:
-    """Download video and audio streams"""
+def _download_streams(video_id: str, progress_callback: Callable) -> Tuple[Path, Path]:
+    """Synchronous download with progress reporting"""
     base_path = Path("temp_videos") / video_id
-
-    # Download video stream
+    
+    # Video stream
     video_file = _download_with_retry(
         command=[
             'yt-dlp',
             '-f', 'bestvideo[height<=1440][ext=mp4]',
             '--concurrent-fragments', '256',
-            '--http-chunk-size', '300M',
             '-o', str(base_path) + '_video.%(ext)s',
             f'https://www.youtube.com/watch?v={video_id}'
         ],
@@ -66,12 +52,11 @@ def _download_streams(video_id: str, progress_callback: callable) -> Tuple[Path,
         progress_callback=progress_callback
     )
 
-    # Download audio stream
+    # Audio stream
     audio_file = _download_with_retry(
         command=[
             'yt-dlp',
             '-f', 'bestaudio[ext=m4a]',
-            '--concurrent-fragments', '8',
             '-o', str(base_path) + '_audio.%(ext)s',
             f'https://www.youtube.com/watch?v={video_id}'
         ],
@@ -80,6 +65,8 @@ def _download_streams(video_id: str, progress_callback: callable) -> Tuple[Path,
     )
 
     return video_file, audio_file
+
+# Keep existing _download_with_retry and _merge_streams implementations
 
 def _merge_streams(video_id: str, video_file: Path, audio_file: Path, final_file: Path) -> str:
     """Merge streams with validation"""
