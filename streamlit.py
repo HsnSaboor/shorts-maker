@@ -45,6 +45,15 @@ def create_zip(output_dir: str) -> str:
     logger.info(f"ZIP creation complete. Size: {humanize.naturalsize(zip_size)}")
     return zip_path
 
+def format_size(size_bytes: int) -> str:
+    """Convert bytes to human-readable format without external dependencies"""
+    units = ["B", "KB", "MB", "GB", "TB"]
+    unit_index = 0
+    while size_bytes >= 1024 and unit_index < len(units)-1:
+        size_bytes /= 1024
+        unit_index += 1
+    return f"{size_bytes:.2f} {units[unit_index]}"
+
 def display_logs():
     """Show processing logs in Streamlit"""
     if st.session_state.get('logs'):
