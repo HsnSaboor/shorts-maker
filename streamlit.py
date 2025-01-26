@@ -8,7 +8,6 @@ from pathlib import Path
 from typing import List
 import io
 import base64
-
 from bulk_processor import BulkProcessor
 
 os.system("playwright install")
