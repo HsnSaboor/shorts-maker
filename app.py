@@ -47,7 +47,8 @@ def main():
 
     with st.sidebar:
         st.header("Settings")
-        lang = st.text_input("Language Code", "en")
+        include_transcripts = st.checkbox("Include Transcripts", value=True, help="Generate transcripts for video clips")
+        lang = st.text_input("Language Code", "en", disabled=not include_transcripts)
         concurrency = st.slider("Concurrency Level", 1, 8, 4)
         output_dir = st.text_input("Output Directory", "processed_videos")
         process_btn = st.button("Start Processing")
