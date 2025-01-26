@@ -16,42 +16,34 @@ def download_video(video_id: str, progress_callback: Optional[Callable] = None) 
         logger.info(f"🎬 Starting download for video: {video_id}")
         output_dir = Path("temp_videos")
         output_dir.mkdir(exist_ok=True)
-        output_path = output_dir / f"{video_id}.mp4"
+        output_base = output_dir / video_id  # Changed from .mp4
 
-        logger.debug(f"📁 Target path: {output_path}")
+        logger.debug(f"📁 Target base path: {output_base}")
         logger.info("⚙️ Configuring yt-dlp parameters")
 
         command = [
             'yt-dlp',
             
-            # Format selection (prioritizes AV1 > VP9 > AVC)
-            '-f', '(bestvideo[height<=1440][vcodec^=av01][fps>30]/'
-                  'bestvideo[height<=1440][vcodec^=vp09][ext=webm]/'
-                  'bestvideo[height<=1440][vcodec^=avc1])+bestaudio',
+            # More compatible format selection
+            '-f', 'bestvideo[height<=1440]+bestaudio/best[height<=1440]',
             
-            # Merge settings
-            '--merge-output-format', 'webm',
+            # Auto merge format
+            '--merge-output-format', 'mkv',  # More container compatibility
             
-            # Turbo download parameters
-            '--concurrent-fragments', '256',  # Max allowed fragments
-            '--http-chunk-size', '200M',      # Larger chunks for big videos
+            # Conservative download parameters
+            '--concurrent-fragments', '16',
+            '--http-chunk-size', '20M',
             '--downloader', 'aria2c',
-            '--downloader-args', 'aria2c:-x 64 -s 256 -k 500M -j 64 --file-allocation=falloc --optimize-concurrent-downloads=true',
-            # Performance tweaks
-            '--no-part',                      # Avoid partial files
-            '--throttled-rate', '100M',       # Skip throttled fragments
-            '--retries', 'infinite',
-            '--fragment-retries', 'infinite',
-            '--buffered-fragments', '256',    # Keep more in memory
-            # Network optimizations
-            '--socket-timeout', '60',
-            '--source-address', '0.0.0.0',    # Bypass connection limits
+            '--downloader-args', 'aria2c:-x 8 -s 16 -k 10M',
+            
+            # Essential parameters only
+            '--retries', '10',
+            '--fragment-retries', '10',
+            '--socket-timeout', '30',
             '--force-ipv4',
-            '--limit-rate', '0',              # No rate limiting
-            # Output control
-            '-o', f'{output_path}.%(ext)s',
-            '--no-simulate',
-            '--no-playlist',
+            
+            # Fixed output template
+            '-o', f'{output_base}.%(ext)s',  # Correct output pattern
             
             f'https://www.youtube.com/watch?v={video_id}'
         ]
@@ -61,38 +53,59 @@ def download_video(video_id: str, progress_callback: Optional[Callable] = None) 
         process = subprocess.Popen(
             command,
             stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
+            stderr=subprocess.PIPE,  # Capture stderr separately
             universal_newlines=True
         )
 
-        # Process output in real-time
-        for line in process.stdout:
-            line = line.strip()
-            if line:
-                # Extract progress information
-                if "[download]" in line and "%" in line:
-                    progress = line.split("[download]")[1].strip()
+        # Capture all output for debugging
+        stdout_lines = []
+        stderr_lines = []
+        
+        # Read both streams concurrently
+        while True:
+            stdout_line = process.stdout.readline()
+            stderr_line = process.stderr.readline()
+            
+            if not stdout_line and not stderr_line:
+                break
+                
+            if stdout_line:
+                stdout_line = stdout_line.strip()
+                stdout_lines.append(stdout_line)
+                if "[download]" in stdout_line and "%" in stdout_line:
+                    progress = stdout_line.split("[download]")[1].strip()
                     logger.info(f"📥 Download progress: {progress}")
                     if progress_callback:
                         try:
-                            # Extract percentage (e.g., "45.2%")
                             percent = float(progress.split("%")[0].strip())
                             progress_callback(percent)
                         except Exception as e:
                             logger.warning(f"⚠️ Could not parse progress: {str(e)}")
+                            
+            if stderr_line:
+                stderr_line = stderr_line.strip()
+                stderr_lines.append(stderr_line)
+                logger.error(f"⛔ yt-dlp error: {stderr_line}")
 
-        # Wait for process to complete
         process.wait()
 
-        if process.returncode != 0:
-            logger.error(f"❌ Download failed for {video_id}")
-            return None
-
-        if output_path.exists():
+        # Check for actual output file with any extension
+        downloaded_files = list(output_dir.glob(f"{video_id}.*"))
+        if downloaded_files:
+            output_path = downloaded_files[0]
             size_mb = output_path.stat().st_size / 1024 / 1024
             logger.info(f"✅ Successfully downloaded {output_path} ({size_mb:.2f} MB)")
             return str(output_path)
-            
+
+        # Detailed error diagnostics
+        if process.returncode != 0:
+            logger.error(f"❌ Download failed for {video_id}. Exit code: {process.returncode}")
+            if stderr_lines:
+                logger.error("🛠️ Last 5 error messages:")
+                for line in stderr_lines[-5:]:
+                    logger.error(f"    {line}")
+            return None
+
         logger.error("❌ Downloaded file not found after successful download")
         return None
 
