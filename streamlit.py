@@ -8,6 +8,7 @@ import zipfile
 from pathlib import Path
 from typing import List
 import io
+import os
 import time
 from bulk_processor import BulkProcessor
 
