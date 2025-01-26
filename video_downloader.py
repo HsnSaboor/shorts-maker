@@ -27,7 +27,7 @@ def download_video(video_id: str, progress_callback: Optional[Callable] = None) 
             '--concurrent-fragments', '256',
             '--http-chunk-size', '300M',
             '-o', str(base_path) + '_video.%(ext)s',
-            '--progress-template', '[download] %(progress._percent_str)s of %(total_bytes_str)s at %(speed_str)s ETA %(eta_str)s',
+            '--progress-template', 'download:%(progress.downloaded_bytes)s/%(progress.total_bytes)s|%(progress._percent_str)s|%(progress.speed)s|%(progress._eta_str)s',
             f'https://www.youtube.com/watch?v={video_id}'
         ]
 
@@ -36,7 +36,7 @@ def download_video(video_id: str, progress_callback: Optional[Callable] = None) 
             '-f', 'bestaudio[ext=m4a]',
             '--concurrent-fragments', '8',
             '-o', str(base_path) + '_audio.%(ext)s',
-            '--progress-template', '[download] %(progress._percent_str)s of %(total_bytes_str)s at %(speed_str)s ETA %(eta_str)s',
+            '--progress-template', 'download:%(progress.downloaded_bytes)s/%(progress.total_bytes)s|%(progress._percent_str)s|%(progress.speed)s|%(progress._eta_str)s',
             f'https://www.youtube.com/watch?v={video_id}'
         ]
 
@@ -52,18 +52,34 @@ def download_video(video_id: str, progress_callback: Optional[Callable] = None) 
 
                 for line in process.stdout:
                     line = line.strip()
-                    if "[download]" in line:
-                        progress = line.strip()
-                        # Log progress and update UI
-                        line = f"📥 {progress}"
-                        logger.info(line)
-                        if progress_callback:
-                            try:
-                                # Extract percentage from progress string formatted as "X% of Y"
-                                percent = float(progress.split()[0].rstrip('%'))
-                                progress_callback("download", percent)
-                            except ValueError:
-                                pass
+                    if line.startswith('download:'):
+                        try:
+                            # Parse the progress information
+                            parts = line.split('|')
+                            bytes_info = parts[0].split(':')[1]
+                            downloaded, total = bytes_info.split('/')
+                            percent = parts[1].strip()
+                            speed = parts[2]
+                            eta = parts[3]
+
+                            # Format bytes to MB
+                            downloaded_mb = float(downloaded) / 1024 / 1024
+                            total_mb = float(total) / 1024 / 1024 if total != 'NA' else 0
+                            speed_formatted = f"{float(speed) / 1024 / 1024:.2f}MB/s" if speed != 'NA' else 'NA'
+
+                            # Create progress message
+                            progress_msg = f"📥 Download Progress: {percent} ({downloaded_mb:.2f}MB / {total_mb:.2f}MB) at {speed_formatted} ETA: {eta}"
+                            logger.info(progress_msg)
+
+                            # Update progress callback
+                            if progress_callback:
+                                try:
+                                    percent_value = float(percent.rstrip('%'))
+                                    progress_callback("download", percent_value)
+                                except ValueError:
+                                    pass
+                        except (ValueError, IndexError) as e:
+                            logger.debug(f"Error parsing progress: {e}")
                         if progress_callback:
                             try:
                                 percent = float(progress.split('%')[0].strip())
