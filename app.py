@@ -88,12 +88,12 @@ def main():
                     st.session_state.progress['steps'][step_type] = {}
                 st.session_state.progress['steps'][step_type][index] = progress
                 st.rerun()
-processor = BulkProcessor(
-    concurrency=concurrency,
-    progress_callback=update_progress,
-    include_transcripts=include_transcripts
-)
-results = processor.process_sources(sources, lang if include_transcripts else None, output_dir)
+
+            processor = BulkProcessor(
+                concurrency=concurrency,
+                progress_callback=update_progress,
+                include_transcripts=include_transcripts
+            )
             results = processor.process_sources(sources, lang if include_transcripts else None, output_dir)
             zip_path = create_zip(output_dir, include_transcripts)
             st.session_state.progress['zip'] = True
