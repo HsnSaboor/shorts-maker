@@ -11,93 +11,64 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 def download_video(video_id: str, progress_callback: Optional[Callable] = None) -> Optional[str]:
-    """Download YouTube video with robust error handling"""
+    """Download YouTube video with real-time progress tracking"""
     try:
         logger.info(f"🎬 Starting download for video: {video_id}")
         output_dir = Path("temp_videos")
         output_dir.mkdir(exist_ok=True)
-        output_template = output_dir / f"{video_id}.%(ext)s"
+        output_path = output_dir / f"{video_id}.mp4"
 
-        logger.debug(f"📁 Output template: {output_template}")
+        logger.debug(f"📁 Target path: {output_path}")
         logger.info("⚙️ Configuring yt-dlp parameters")
 
         command = [
             'yt-dlp',
-            '-f', 'bestvideo[height<=1440]+bestaudio/best',
-            '--merge-output-format', 'mp4',
-            '--concurrent-fragments', '8',
-            '--http-chunk-size', '10M',
-            '--retries', '10',
-            '--fragment-retries', '10',
-            '--socket-timeout', '30',
-            '--force-overwrites',
-            '-o', str(output_template),
-            '--no-playlist',
+            '-f', 'bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[height<=1080][ext=mp4]/best',
+            '-o', str(output_path),
+            '--progress',  # Show progress bar
             f'https://www.youtube.com/watch?v={video_id}'
         ]
 
-        logger.debug(f"🔧 Executing: {' '.join(command)}")
+        logger.debug(f"🔧 Executing command: {' '.join(command)}")
         
         process = subprocess.Popen(
             command,
             stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            universal_newlines=True,
-            bufsize=1
+            stderr=subprocess.STDOUT,
+            universal_newlines=True
         )
 
-        # Capture all output streams
-        output = []
-        while True:
-            # Read stdout
-            stdout_line = process.stdout.readline()
-            if stdout_line:
-                output.append(stdout_line)
-                if "[download]" in stdout_line and "%" in stdout_line:
-                    progress = stdout_line.split("[download]")[1].strip()
-                    logger.info(f"📥 Progress: {progress}")
+        # Process output in real-time
+        for line in process.stdout:
+            line = line.strip()
+            if line:
+                # Extract progress information
+                if "[download]" in line and "%" in line:
+                    progress = line.split("[download]")[1].strip()
+                    logger.info(f"📥 Download progress: {progress}")
                     if progress_callback:
                         try:
+                            # Extract percentage (e.g., "45.2%")
                             percent = float(progress.split("%")[0].strip())
                             progress_callback(percent)
                         except Exception as e:
-                            logger.warning(f"Progress parse error: {str(e)}")
+                            logger.warning(f"⚠️ Could not parse progress: {str(e)}")
+
+        # Wait for process to complete
+        process.wait()
+
+        if process.returncode != 0:
+            logger.error(f"❌ Download failed for {video_id}")
+            return None
+
+        if output_path.exists():
+            size_mb = output_path.stat().st_size / 1024 / 1024
+            logger.info(f"✅ Successfully downloaded {output_path} ({size_mb:.2f} MB)")
+            return str(output_path)
             
-            # Read stderr
-            stderr_line = process.stderr.readline()
-            if stderr_line:
-                logger.error(f"⛔ yt-dlp error: {stderr_line.strip()}")
-                output.append(f"ERROR: {stderr_line}")
-            
-            # Check process completion
-            if process.poll() is not None:
-                break
-
-        # Final check after loop
-        stdout, stderr = process.communicate()
-        output.extend(stdout.splitlines())
-        if stderr:
-            logger.error(f"⛔ Final errors: {stderr.strip()}")
-            output.extend(f"FINAL ERROR: {line}" for line in stderr.splitlines())
-
-        # Verify successful download
-        downloaded_files = list(output_dir.glob(f"{video_id}.*"))
-        if downloaded_files:
-            output_path = downloaded_files[0]
-            if output_path.stat().st_size > 1024:  # Minimum 1KB file check
-                size_mb = output_path.stat().st_size / 1024 / 1024
-                logger.info(f"✅ Success: {output_path.name} ({size_mb:.2f}MB)")
-                return str(output_path)
-            else:
-                logger.error("❌ Downloaded file is too small (corrupted?)")
-                output_path.unlink()
-
-        # Error diagnostics
-        logger.error(f"❌ Download failed for {video_id}")
-        logger.debug(f"Full yt-dlp output:\n{'\n'.join(output)}")
-        
+        logger.error("❌ Downloaded file not found after successful download")
         return None
 
     except Exception as e:
-        logger.error(f"🔥 Critical error: {str(e)}", exc_info=True)
+        logger.error(f"🔥 Unexpected download error: {str(e)}", exc_info=True)
         return None
