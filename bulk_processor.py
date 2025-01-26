@@ -134,23 +134,19 @@ class BulkProcessor:
         return list(set(video_ids))
 
     async def _resolve_playlist(self, url: str) -> List[str]:
+        """Resolve playlist using our custom function"""
         try:
-            playlist = Playlist(url)
-            while True:
-                has_more = await asyncio.to_thread(lambda: playlist.hasMoreVideos)
-                if not has_more:
-                    break
-                await asyncio.to_thread(playlist.getNextVideos)
-            return [video['id'] for video in playlist.videos]
+            from youtube_search import get_playlist_video_ids
+            return get_playlist_video_ids(url) or []
         except Exception as e:
             logger.error(f"Failed to resolve playlist {url}: {str(e)}")
             return []
-
+    
     async def _resolve_channel(self, url: str) -> List[str]:
+        """Resolve channel using our custom function"""
         try:
-            channel = Channel(url)
-            await asyncio.to_thread(channel.get_channel_videos)
-            return [video['id'] for video in channel.videos]
+            from youtube_search import get_channel_video_ids
+            return get_channel_video_ids(url, limit=50) or []  # Increased limit
         except Exception as e:
             logger.error(f"Failed to resolve channel {url}: {str(e)}")
             return []
