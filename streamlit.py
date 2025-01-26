@@ -41,17 +41,27 @@ async def async_process_sources(processor, sources, lang, output_dir):
     return await processor.process_sources(sources, lang, output_dir)
 
 def create_zip(output_dir: str) -> str:
-    """Create zip file of all processed content"""
-    zip_dir = ensure_directory_exists(os.path.join(output_dir, "zips"))
-    zip_path = os.path.join(zip_dir, "clips_with_transcripts.zip")
+    """Package results into ZIP with proper path handling"""
+    zip_path = os.path.join(output_dir, "clips_with_transcripts.zip")
     
     with zipfile.ZipFile(zip_path, 'w') as zipf:
-        for root, _, files in os.walk(output_dir):
+        for root, dirs, files in os.walk(output_dir):
+            # Skip existing ZIP files
+            if root == output_dir and "clips_with_transcripts.zip" in files:
+                files.remove("clips_with_transcripts.zip")
+                
             for file in files:
                 if file.endswith(('.mp4', '.json')):
                     file_path = os.path.join(root, file)
-                    arcname = os.path.relpath(file_path, output_dir)
-                    zipf.write(file_path, arcname)
+                    relative_path = os.path.relpath(file_path, output_dir)
+                    zipf.write(file_path, arcname=relative_path)
+                    logging.info(f"Added to ZIP: {relative_path}")
+    
+    # Verify ZIP contents
+    with zipfile.ZipFile(zip_path, 'r') as zip_ref:
+        file_list = zip_ref.namelist()
+        logging.info(f"ZIP contains {len(file_list)} files")
+        
     return zip_path
 
 def main():
