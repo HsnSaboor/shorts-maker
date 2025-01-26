@@ -3,8 +3,13 @@ import json
 import logging
 from pathlib import Path
 from typing import List, Dict, Optional, Callable, Awaitable
-from video_downloader import download_video
 from transcript_utils import save_clip_transcripts, extract_clip_transcripts
+from video_downloader import download_video
+
+# Add missing imports (replace with your actual implementations)
+from transcript import fetch_transcript
+from heatmap import process_video
+from video_splitter import cut_video_into_clips
 
 class BulkProcessor:
     def __init__(self, 
@@ -19,7 +24,7 @@ class BulkProcessor:
                                   output_dir: str, 
                                   lang: str,
                                   total_videos: int,
-                          
+                                  index: int) -> Optional[Dict]:
 
     async def process_sources(self, sources: List[str], lang: str, output_dir: str) -> Dict:
         video_ids = await self._resolve_sources(sources)
