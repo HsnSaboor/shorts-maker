@@ -1,8 +1,6 @@
-import asyncio
-import json
 import logging
 from pathlib import Path
-from typing import List, Dict, Optional, Callable, Awaitable
+from typing import List, Dict, Optional, Callable
 from youtube_source_resolver import get_playlist_video_ids, get_channel_video_ids
 from transcript_utils import save_clip_transcripts, extract_clip_transcripts
 from video_downloader import download_video
@@ -16,12 +14,11 @@ class BulkProcessor:
     def __init__(
         self, 
         concurrency: int = 4,
-        progress_callback: Optional[Callable[[str, int, float], Awaitable[None]]] = None
+        progress_callback: Optional[Callable[[str, int, float], None]] = None
     ):
-        self.semaphore = asyncio.Semaphore(concurrency)
         self.progress_callback = progress_callback
 
-    async def _process_single_video(
+    def _process_single_video(
         self, 
         video_id: str, 
         output_dir: str, 
@@ -29,91 +26,84 @@ class BulkProcessor:
         total_videos: int,
         index: int
     ) -> Optional[Dict]:
-        async with self.semaphore:
-            try:
-                video_dir = Path(output_dir) / video_id
-                video_dir.mkdir(parents=True, exist_ok=True)
+        try:
+            video_dir = Path(output_dir) / video_id
+            video_dir.mkdir(parents=True, exist_ok=True)
 
-                def handle_progress(stream_type: str, progress: float):
-                    if self.progress_callback:
-                        asyncio.run_coroutine_threadsafe(
-                            self.progress_callback(stream_type, index, progress),
-                            loop=asyncio.get_running_loop()
-                        )
-
-                video_path = await download_video(video_id, handle_progress)
-                if not video_path or not Path(video_path).exists():
-                    raise ValueError("Download failed")
-
+            def handle_progress(stream_type: str, progress: float):
                 if self.progress_callback:
-                    await self.progress_callback("transcript", index, 0)
-                
-                transcript = await asyncio.to_thread(fetch_transcript, video_id, lang)
-                
-                if self.progress_callback:
-                    await self.progress_callback("transcript", index, 100)
-                    await self.progress_callback("heatmap", index, 0)
-                
-                clips = await process_video(video_id)
-                
-                if self.progress_callback:
-                    await self.progress_callback("heatmap", index, 100)
-                    await self.progress_callback("clips", index, 0)
-                
-                valid_clips = [c for c in clips if c['end'] > c['start']][:10]
-                if not valid_clips:
-                    raise ValueError("No valid clips generated")
+                    self.progress_callback(stream_type, index, progress)
 
-                clip_dir = video_dir / "clips"
-                clip_paths = await asyncio.to_thread(
-                    cut_video_into_clips, video_path, valid_clips, str(clip_dir)
-                )
-                
-                if self.progress_callback:
-                    await self.progress_callback("clips", index, 100)
+            video_path = download_video(video_id, handle_progress)
+            if not video_path or not Path(video_path).exists():
+                raise ValueError("Download failed")
 
-                processed_clips = extract_clip_transcripts(json.loads(transcript), valid_clips)
-                transcript_path = video_dir / "clip_transcripts.json"
-                await asyncio.to_thread(
-                    save_clip_transcripts, processed_clips, str(transcript_path)
-                )
+            if self.progress_callback:
+                self.progress_callback("transcript", index, 0)
+            
+            transcript = fetch_transcript(video_id, lang)
+            
+            if self.progress_callback:
+                self.progress_callback("transcript", index, 100)
+                self.progress_callback("heatmap", index, 0)
+            
+            clips = process_video(video_id)
+            
+            if self.progress_callback:
+                self.progress_callback("heatmap", index, 100)
+                self.progress_callback("clips", index, 0)
+            
+            valid_clips = [c for c in clips if c['end'] > c['start']][:10]
+            if not valid_clips:
+                raise ValueError("No valid clips generated")
 
-                return {
-                    'video_id': video_id,
-                    'status': 'success',
-                    'clips': clip_paths,
-                    'clip_dir': str(clip_dir),
-                    'transcript_path': str(transcript_path)
-                }
+            clip_dir = video_dir / "clips"
+            clip_paths = cut_video_into_clips(video_path, valid_clips, str(clip_dir))
+            
+            if self.progress_callback:
+                self.progress_callback("clips", index, 100)
 
-            except Exception as e:
-                logger.error(f"Processing failed: {str(e)}")
-                return {
-                    'video_id': video_id,
-                    'status': 'failed',
-                    'error': str(e)
-                }
+            processed_clips = extract_clip_transcripts(json.loads(transcript), valid_clips)
+            transcript_path = video_dir / "clip_transcripts.json"
+            save_clip_transcripts(processed_clips, str(transcript_path))
 
-    async def process_sources(self, sources: List[str], lang: str, output_dir: str) -> Dict:
-        video_ids = await self._resolve_sources(sources)
+            return {
+                'video_id': video_id,
+                'status': 'success',
+                'clips': clip_paths,
+                'clip_dir': str(clip_dir),
+                'transcript_path': str(transcript_path)
+            }
+
+        except Exception as e:
+            logger.error(f"Processing failed: {str(e)}")
+            return {
+                'video_id': video_id,
+                'status': 'failed',
+                'error': str(e)
+            }
+
+    def process_sources(self, sources: List[str], lang: str, output_dir: str) -> Dict:
+        video_ids = self._resolve_sources(sources)
         total = len(video_ids)
-        tasks = [
-            self._process_single_video(vid, output_dir, lang, total, idx)
-            for idx, vid in enumerate(video_ids)
-        ]
-        results = await asyncio.gather(*tasks)
+        results = []
+        
+        for idx, vid in enumerate(video_ids):
+            result = self._process_single_video(vid, output_dir, lang, total, idx)
+            results.append(result)
+            
         return self._format_results(results)
 
-    async def _resolve_sources(self, sources: List[str]) -> List[str]:
+    def _resolve_sources(self, sources: List[str]) -> List[str]:
         video_ids = []
         for source in sources:
             try:
                 if "youtube.com/playlist" in source or "list=" in source:
-                    ids = await get_playlist_video_ids(source)
+                    ids = get_playlist_video_ids(source)
                     if ids:
                         video_ids.extend(ids)
                 elif "youtube.com/channel" in source or "youtube.com/user" in source or "youtube.com/c/" in source:
-                    ids = await get_channel_video_ids(source)
+                    ids = get_channel_video_ids(source)
                     if ids:
                         video_ids.extend(ids)
                 elif len(source) == 11:
