@@ -8,10 +8,9 @@ import zipfile
 from pathlib import Path
 from typing import List
 import io
-import os
-from bulk_processor import BulkProcessor
+import time
 
-os.system("playwright install")
+from bulk_processor import BulkProcessor
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
@@ -95,4 +94,12 @@ def main():
 
     # Download section
     if 'zip_data' in st.session_state and st.session_state.zip_data:
-        st.download
+        st.download_button(
+            label="Download Processed Clips",
+            data=st.session_state.zip_data,
+            file_name="processed_clips.zip",
+            mime="application/zip"
+        )
+
+if __name__ == "__main__":
+    main()
