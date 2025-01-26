@@ -42,13 +42,13 @@ def download_video(video_id: str, progress_callback: Optional[Callable] = None) 
 
         # Download video
         logger.info("⬇️ Starting video download")
-        if not _execute_command(video_command, progress_callback):
+        if not _execute_command(video_command, progress_callback, "Video"):
             logger.error("❌ Video download failed")
             return None
 
         # Download audio
         logger.info("🔊 Starting audio download")
-        if not _execute_command(audio_command, progress_callback):
+        if not _execute_command(audio_command, progress_callback, "Audio"):
             logger.error("❌ Audio download failed")
             return None
 
@@ -68,7 +68,7 @@ def download_video(video_id: str, progress_callback: Optional[Callable] = None) 
         logger.error(f"🔥 Unexpected download error: {str(e)}", exc_info=True)
         return None
 
-def _execute_command(command: list, progress_callback: Optional[Callable]) -> bool:
+def _execute_command(command: list, progress_callback: Optional[Callable], label: str) -> bool:
     """Execute download command with real-time progress handling"""
     try:
         process = subprocess.Popen(
@@ -82,7 +82,7 @@ def _execute_command(command: list, progress_callback: Optional[Callable]) -> bo
             line = line.strip()
             if line and "[download]" in line and "%" in line:
                 progress = line.split("[download]")[1].strip()
-                logger.info(f"📥 Download progress: {progress}")
+                print(f"\r📥 {label} Progress: {progress}", end='', flush=True)
                 if progress_callback:
                     try:
                         percent = float(progress.split("%")[0].strip())
@@ -91,6 +91,7 @@ def _execute_command(command: list, progress_callback: Optional[Callable]) -> bo
                         logger.warning(f"⚠️ Could not parse progress: {str(e)}")
 
         process.wait()
+        print()  # New line after progress completes
         return process.returncode == 0
 
     except Exception as e:
