@@ -22,12 +22,20 @@ def download_video(video_id: str, progress_callback: Optional[Callable] = None) 
         logger.info("⚙️ Configuring yt-dlp parameters")
 
         command = [
-            'yt-dlp',
-            '-f', 'bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[height<=1080][ext=mp4]/best',
-            '-o', str(output_path),
-            '--progress',  # Show progress bar
-            f'https://www.youtube.com/watch?v={video_id}'
-        ]
+    'yt-dlp',
+    '-f', 'bestvideo[height<=1440][vcodec^=vp09][ext=webm]+bestaudio[ext=webm]/'
+          'bestvideo[height<=1440][ext=webm]+bestaudio[ext=webm]/'
+          'bestvideo[height<=1440]+bestaudio',
+    '--merge-output-format', 'webm',
+    '--concurrent-fragments', '64',
+    '--http-chunk-size', '64M',
+    '--downloader', 'aria2c',
+    '--downloader-args', 'aria2c:-x 16 -s 64 -k 100M',
+    '--no-simulate',
+    '--no-playlist',
+    '-o', str(output_path),
+    f'https://www.youtube.com/watch?v={video_id}'
+]
 
         logger.debug(f"🔧 Executing command: {' '.join(command)}")
         
