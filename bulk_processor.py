@@ -6,7 +6,7 @@ from typing import List, Dict, Optional
 from youtube_search import get_playlist_video_ids, get_channel_video_ids
 from transcript_utils import save_clip_transcripts, extract_clip_transcripts
 from transcript import fetch_transcript
-from heatmap import process_video, fallback_clip_detection
+from heatmap import process_video
 from video_downloader import download_video, get_video_info
 from video_splitter import cut_video_into_clips
 
@@ -39,10 +39,6 @@ class BulkProcessor:
                 # 3. Analyze content
                 self.logger.info(f"🌡️ Analyzing heatmap for {video_id}")
                 clips = await process_video(video_id)
-                if not clips:
-                    self.logger.warning("⚠️ Using fallback clip detection")
-                    video_info = get_video_info(video_id)
-                    clips = await fallback_clip_detection(video_id, video_info.get('duration', 600))
 
                 # 4. Process clips
                 valid_clips = [c for c in clips if c['end'] > c['start']][:10]
