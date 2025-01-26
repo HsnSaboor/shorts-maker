@@ -9,63 +9,51 @@ from pathlib import Path
 from typing import List
 from bulk_processor import BulkProcessor
 
-# Install Playwright dependencies first
-os.system("playwright install")
-os.system("playwright install-deps")
-
 # Configure logging
-class StreamlitHandler(logging.Handler):
+logger = logging.getLogger(__name__)
+logger.setLevel(logging.INFO)
+
+class StreamlitLogHandler(logging.Handler):
     def emit(self, record):
         log_entry = self.format(record)
         st.code(log_entry, language="plaintext")
 
-logger = logging.getLogger(__name__)
-logger.setLevel(logging.INFO)
-
 formatter = logging.Formatter('%(asctime)s - %(levelname)s - %(message)s')
 
 # Add handlers
-handlers = [
-    logging.FileHandler('processing.log'),
-    StreamlitHandler()
-]
+file_handler = logging.FileHandler('processing.log')
+streamlit_handler = StreamlitLogHandler()
 
-for handler in handlers:
-    handler.setFormatter(formatter)
-    logger.addHandler(handler)
+file_handler.setFormatter(formatter)
+streamlit_handler.setFormatter(formatter)
+
+logger.addHandler(file_handler)
+logger.addHandler(streamlit_handler)
 
 # Initialize session state
 if 'processed' not in st.session_state:
-    st.session_state.processed = False
-if 'clips' not in st.session_state:
-    st.session_state.clips = []
-if 'selected_clips' not in st.session_state:
-    st.session_state.selected_clips = set()
-if 'zip_data' not in st.session_state:
-    st.session_state.zip_data = None
+    st.session_state.update({
+        'processed': False,
+        'clips': [],
+        'selected_clips': set(),
+        'zip_data': None,
+        'log_messages': []
+    })
 
 def get_video_ids(input_text, uploaded_file):
     """Extract video IDs from text input or uploaded file"""
     video_ids = []
     if uploaded_file:
-        text = uploaded_file.read().decode()
-        video_ids.extend([vid.strip() for vid in text.split(',') if vid.strip()])
+        try:
+            text = uploaded_file.read().decode()
+            video_ids.extend([vid.strip() for vid in text.split(',') if vid.strip()])
+        except Exception as e:
+            logger.error(f"File read error: {str(e)}")
     if input_text:
         video_ids.extend([vid.strip() for vid in input_text.split(',') if vid.strip()])
     return list(set(video_ids))
 
-async def process_videos(video_ids, lang, output_dir, concurrency, transcript_enabled):
-    """Async processing wrapper"""
-    try:
-        processor = BulkProcessor(concurrency=concurrency)
-        return await processor.process_sources(
-            video_ids, lang, str(output_dir), transcript_enabled
-        )
-    except Exception as e:
-        logger.error(f"Processing error: {str(e)}", exc_info=True)
-        return None
-
-def create_zip(temp_dir: str):
+def create_zip(temp_dir):
     """Create in-memory ZIP file from processed files"""
     zip_buffer = io.BytesIO()
     try:
@@ -74,27 +62,35 @@ def create_zip(temp_dir: str):
                 for file in files:
                     file_path = Path(root) / file
                     if file_path.suffix in ('.mp4', '.json'):
-                        zip_file.write(file_path, arcname=file_path.relative_to(temp_dir))
-                        logger.info(f"Added to ZIP: {file_path.name}")
+                        arcname = file_path.relative_to(temp_dir)
+                        zip_file.write(file_path, arcname=arcname)
+                        logger.info(f"Added to ZIP: {arcname}")
     except Exception as e:
         logger.error(f"ZIP creation failed: {str(e)}")
-    return zip_buffer
+    return zip_buffer.getvalue()
 
-async def main_async_flow():
+def main():
     st.title("YouTube Bulk Video Clipper")
     
+    # Install Playwright dependencies
+    if not st.session_state.get('playwright_installed', False):
+        with st.spinner("Installing dependencies..."):
+            os.system("playwright install")
+            os.system("playwright install-deps")
+            st.session_state.playwright_installed = True
+
     # Sidebar controls
     with st.sidebar:
         st.header("Processing Options")
         concurrency = st.slider("Concurrency Level", 1, 10, 4)
         lang = st.selectbox("Language", ["en", "es", "fr", "de", "ja"], index=0)
         transcript_enabled = st.checkbox("Enable Transcripts", value=True)
-    
+
     # Main input area
     st.header("Input Sources")
     input_text = st.text_input("Enter Video IDs (comma-separated)")
     uploaded_file = st.file_uploader("Or upload TXT file", type=["txt"])
-    
+
     # Process button
     if st.button("Process Videos"):
         video_ids = get_video_ids(input_text, uploaded_file)
@@ -104,22 +100,23 @@ async def main_async_flow():
             return
             
         with tempfile.TemporaryDirectory() as temp_dir:
-            with st.spinner("Processing videos..."):
+            with st.spinner("Processing videos..."), st.empty() as status_container:
                 try:
-                    logger.info(f"Starting processing for {len(video_ids)} videos")
-                    
-                    # Create new event loop for Streamlit compatibility
+                    # Create new event loop for async processing
                     loop = asyncio.new_event_loop()
                     asyncio.set_event_loop(loop)
                     
-                    results = await process_videos(
-                        video_ids, lang, temp_dir, concurrency, transcript_enabled
+                    processor = BulkProcessor(concurrency=concurrency)
+                    results = loop.run_until_complete(
+                        processor.process_sources(
+                            video_ids, lang, temp_dir, transcript_enabled
+                        )
                     )
                     
                     if not results:
                         st.error("Processing failed - check logs")
                         return
-                    
+
                     # Collect processed clips
                     all_clips = []
                     for result in results['success']:
@@ -132,19 +129,18 @@ async def main_async_flow():
                                 'attention': result.get('average_attention', 0),
                                 'transcript': str(clip_file.with_suffix('.json'))
                             })
-                    
+
                     st.session_state.clips = all_clips
                     st.session_state.selected_clips = set(range(len(all_clips)))
+                    st.session_state.zip_data = create_zip(temp_dir)
                     st.session_state.processed = True
                     
-                    # Create ZIP
-                    zip_buffer = create_zip(temp_dir)
-                    st.session_state.zip_data = zip_buffer.getvalue()
-                    logger.info(f"Created ZIP package with {len(all_clips)} clips")
-                    
+                    logger.info(f"Processed {len(all_clips)} clips successfully")
+                    status_container.success("Processing completed!")
+
                 except Exception as e:
-                    logger.error(f"Critical error: {str(e)}", exc_info=True)
-                    st.error(f"Processing failed: {str(e)}")
+                    logger.error(f"Processing failed: {str(e)}", exc_info=True)
+                    st.error(f"Processing error: {str(e)}")
 
     # Results display
     if st.session_state.processed and st.session_state.clips:
@@ -188,6 +184,10 @@ async def main_async_flow():
                 mime="application/zip"
             )
 
+    # Show log messages
+    st.header("Processing Logs")
+    if st.session_state.log_messages:
+        st.code("\n".join(st.session_state.log_messages[-20:]), language="plaintext")
+
 if __name__ == "__main__":
-    # Run async main flow
-    asyncio.run(main_async_flow())
+    main()
