@@ -13,12 +13,14 @@ logger = logging.getLogger(__name__)
 
 class BulkProcessor:
     def __init__(
-        self, 
+        self,
         concurrency: int = 4,
-        progress_callback: Optional[Callable[[str, int, float], None]] = None
+        progress_callback: Optional[Callable[[str, int, float], None]] = None,
+        include_transcripts: bool = True
     ):
         self.progress_callback = progress_callback
-        logger.info(f"🚀 Initializing BulkProcessor (concurrency: {concurrency})")
+        self.include_transcripts = include_transcripts
+        logger.info(f"🚀 Initializing BulkProcessor (concurrency: {concurrency}, transcripts: {'enabled' if include_transcripts else 'disabled'})")
 
     def _process_single_video(
         self, 
@@ -49,17 +51,23 @@ class BulkProcessor:
                 raise ValueError("Download failed")
             logger.info(f"✅ Video downloaded: {video_path}")
 
-            # Step 2: Fetch Transcript
-            logger.info(f"📝 Fetching transcript (language: {lang})...")
-            if self.progress_callback:
-                self.progress_callback("transcript", index, 0)
-            transcript = fetch_transcript(video_id, lang)
-            if self.progress_callback:
-                self.progress_callback("transcript", index, 100)
-            if not transcript:
-                logger.error("❌ Failed to fetch transcript")
-                raise ValueError("No transcript available")
-            logger.info("✅ Transcript fetched successfully")
+            # Step 2: Fetch Transcript (if enabled)
+            transcript = None
+            if self.include_transcripts:
+                logger.info(f"📝 Fetching transcript (language: {lang})...")
+                if self.progress_callback:
+                    self.progress_callback("transcript", index, 0)
+                transcript = fetch_transcript(video_id, lang)
+                if self.progress_callback:
+                    self.progress_callback("transcript", index, 100)
+                if not transcript:
+                    logger.error("❌ Failed to fetch transcript")
+                    raise ValueError("No transcript available")
+                logger.info("✅ Transcript fetched successfully")
+            else:
+                logger.info("📝 Skipping transcript (disabled)")
+                if self.progress_callback:
+                    self.progress_callback("transcript", index, 100)
 
             # Step 3: Generate Heatmap and Process Video
             logger.info("🔥 Generating heatmap analysis...")
@@ -92,24 +100,30 @@ class BulkProcessor:
                 raise ValueError("Clip creation failed")
             logger.info(f"✅ Successfully created {len(clip_paths)} clips")
 
-            # Step 6: Process and Save Transcripts
-            logger.info("📝 Processing clip transcripts...")
-            processed_clips = extract_clip_transcripts(json.loads(transcript), valid_clips)
-            transcript_path = video_dir / "clip_transcripts.json"
-            save_clip_transcripts(processed_clips, str(transcript_path))
-            logger.info(f"✅ Saved clip transcripts to: {transcript_path}")
+            # Step 6: Process and Save Transcripts (if enabled)
+            transcript_path = None
+            if self.include_transcripts and transcript:
+                logger.info("📝 Processing clip transcripts...")
+                processed_clips = extract_clip_transcripts(json.loads(transcript), valid_clips)
+                transcript_path = video_dir / "clip_transcripts.json"
+                save_clip_transcripts(processed_clips, str(transcript_path))
+                logger.info(f"✅ Saved clip transcripts to: {transcript_path}")
+            else:
+                logger.info("📝 Skipping clip transcripts (disabled)")
 
             if self.progress_callback:
                 self.progress_callback("clips", index, 100)
 
             logger.info(f"🎉 Successfully completed processing for video: {video_id}")
-            return {
+            result = {
                 'video_id': video_id,
                 'status': 'success',
                 'clips': clip_paths,
-                'clip_dir': str(clip_dir),
-                'transcript_path': str(transcript_path)
+                'clip_dir': str(clip_dir)
             }
+            if transcript_path:
+                result['transcript_path'] = str(transcript_path)
+            return result
 
         except Exception as e:
             logger.error(f"❌ Processing failed for video {video_id}: {str(e)}")
