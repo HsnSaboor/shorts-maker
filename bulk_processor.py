@@ -1,24 +1,35 @@
-# bulk_processor.py
 import asyncio
 import json
 import logging
 from pathlib import Path
 from typing import List, Dict, Optional, Callable, Awaitable
+from youtube_search import get_playlist_video_ids, get_channel_video_ids
 from transcript_utils import save_clip_transcripts, extract_clip_transcripts
 from video_downloader import download_video
 from transcript import fetch_transcript
 from heatmap import process_video
 from video_splitter import cut_video_into_clips
 
+logger = logging.getLogger(__name__)
+
 class BulkProcessor:
     def __init__(
         self, 
         concurrency: int = 4,
-        progress_callback: Optional[Callable[[str, int, int], Awaitable[None]]] = None
+        progress_callback: Optional[Callable[[str, int, float], Awaitable[None]]] = None
     ):
         self.semaphore = asyncio.Semaphore(concurrency)
         self.progress_callback = progress_callback
-        self.logger = logging.getLogger(__name__)
+        self._validate_dependencies()
+
+    def _validate_dependencies(self):
+        """Ensure required binaries are available"""
+        try:
+            subprocess.run(['yt-dlp', '--version'], check=True, capture_output=True)
+            subprocess.run(['ffmpeg', '-version'], check=True, capture_output=True)
+        except (subprocess.CalledProcessError, FileNotFoundError) as e:
+            logger.error("Missing required dependency: %s", str(e))
+            raise RuntimeError("Missing required binaries (yt-dlp/ffmpeg)") from e
 
     async def _process_single_video(
         self, 
@@ -28,73 +39,73 @@ class BulkProcessor:
         total_videos: int,
         index: int
     ) -> Optional[Dict]:
+        """Full processing pipeline for a single video"""
         async with self.semaphore:
             try:
+                logger.info(f"Starting processing pipeline for {video_id}")
+                video_dir = Path(output_dir) / video_id
+                video_dir.mkdir(parents=True, exist_ok=True)
 
-                 # Create progress wrapper
-                def progress_callback(stream_type: str, progress: float):
+                # Setup progress reporting
+                def handle_progress(stream_type: str, progress: float):
                     if self.progress_callback:
                         asyncio.run_coroutine_threadsafe(
                             self.progress_callback(stream_type, index, progress),
                             loop=asyncio.get_running_loop()
                         )
-                video_dir = Path(output_dir) / video_id
-                video_dir.mkdir(parents=True, exist_ok=True)
 
-                # Download progress handler
-                def download_progress(stream_type: str, progress: float):
-                    if self.progress_callback:
-                        asyncio.create_task(
-                            self.progress_callback("download", index, progress)
-                        )
+                # Download phase
+                logger.debug(f"Downloading {video_id}")
+                video_path = await download_video(video_id, handle_progress)
+                if not video_path or not Path(video_path).exists():
+                    raise ValueError(f"Download failed for {video_id}")
 
-                # Download video
-                self.logger.info(f"Starting download for {video_id}")
-                video_path = await asyncio.to_thread(
-                    download_video, video_id, download_progress
-                )
-                if not video_path:
-                    raise ValueError("Download failed")
-
-                # Transcript processing
+                # Transcript phase
+                logger.debug(f"Fetching transcript for {video_id}")
                 if self.progress_callback:
                     await self.progress_callback("transcript", index, 0)
-                self.logger.info(f"Fetching transcript for {video_id}")
+                
                 transcript = await asyncio.to_thread(fetch_transcript, video_id, lang)
+                
                 if self.progress_callback:
                     await self.progress_callback("transcript", index, 100)
 
-                # Heatmap generation
+                # Analysis phase
+                logger.debug(f"Analyzing {video_id}")
                 if self.progress_callback:
                     await self.progress_callback("heatmap", index, 0)
-                self.logger.info(f"Analyzing heatmap for {video_id}")
+                
                 clips = await process_video(video_id)
+                
                 if self.progress_callback:
                     await self.progress_callback("heatmap", index, 100)
 
                 # Clip processing
+                logger.debug(f"Processing clips for {video_id}")
                 valid_clips = [c for c in clips if c['end'] > c['start']][:10]
                 if not valid_clips:
-                    raise ValueError("No valid clips generated")
+                    raise ValueError(f"No valid clips generated for {video_id}")
 
-                # Create video clips
                 if self.progress_callback:
                     await self.progress_callback("clips", index, 0)
-                self.logger.info(f"Creating clips for {video_id}")
+
                 clip_dir = video_dir / "clips"
                 clip_paths = await asyncio.to_thread(
                     cut_video_into_clips, video_path, valid_clips, str(clip_dir)
                 )
+                
                 if self.progress_callback:
                     await self.progress_callback("clips", index, 100)
 
-                # Save transcripts
+                # Save results
+                logger.debug(f"Saving results for {video_id}")
                 processed_clips = extract_clip_transcripts(json.loads(transcript), valid_clips)
                 transcript_path = video_dir / "clip_transcripts.json"
                 await asyncio.to_thread(
                     save_clip_transcripts, processed_clips, str(transcript_path)
                 )
 
+                logger.info(f"Successfully processed {video_id}")
                 return {
                     'video_id': video_id,
                     'status': 'success',
@@ -104,21 +115,31 @@ class BulkProcessor:
                 }
 
             except Exception as e:
-                self.logger.error(f"Processing failed: {str(e)}")
+                logger.error(f"Processing failed for {video_id}: {str(e)}", exc_info=True)
                 return {
                     'video_id': video_id,
                     'status': 'failed',
                     'error': str(e)
                 }
 
-    async def process_sources(
-        self, 
-        sources: List[str], 
-        lang: str, 
-        output_dir: str
-    ) -> Dict:
+    async def process_sources(self, sources: List[str], lang: str, output_dir: str) -> Dict:
+        """Process multiple video sources"""
+        logger.info(f"Starting processing for {len(sources)} sources")
         video_ids = await self._resolve_sources(sources)
         total = len(video_ids)
+        
+        if total == 0:
+            logger.warning("No valid video IDs found")
+            return {
+                'success': [],
+                'failed': [],
+                'total_processed': 0,
+                'success_count': 0,
+                'failure_count': 0,
+                'success_rate': 0
+            }
+
+        logger.info(f"Processing {total} videos")
         tasks = [
             self._process_single_video(vid, output_dir, lang, total, idx)
             for idx, vid in enumerate(video_ids)
@@ -127,29 +148,39 @@ class BulkProcessor:
         return self._format_results(results)
 
     async def _resolve_sources(self, sources: List[str]) -> List[str]:
+        """Resolve various source types to video IDs"""
         video_ids = []
+        logger.info(f"Resolving {len(sources)} input sources")
+        
         for source in sources:
             try:
+                source = source.strip()
+                if not source:
+                    continue
+
+                logger.debug(f"Processing source: {source}")
                 if "youtube.com/playlist" in source or "list=" in source:
-                    self.logger.info(f"Processing playlist: {source}")
                     ids = get_playlist_video_ids(source)
                     if ids:
+                        logger.info(f"Found {len(ids)} videos in playlist")
                         video_ids.extend(ids)
                 elif "youtube.com/channel" in source or "youtube.com/user" in source or "youtube.com/c/" in source:
-                    self.logger.info(f"Processing channel: {source}")
                     ids = get_channel_video_ids(source)
                     if ids:
+                        logger.info(f"Found {len(ids)} videos in channel")
                         video_ids.extend(ids)
                 elif len(source) == 11:
-                    self.logger.info(f"Processing video ID: {source}")
+                    logger.info(f"Processing single video ID: {source}")
                     video_ids.append(source)
                 else:
-                    self.logger.warning(f"Unrecognized source: {source}")
+                    logger.warning(f"Unrecognized source format: {source}")
             except Exception as e:
-                self.logger.error(f"Error processing {source}: {str(e)}")
+                logger.error(f"Error processing source {source}: {str(e)}", exc_info=True)
+
         return list(set(video_ids))
 
     def _format_results(self, results: List) -> Dict:
+        """Generate final processing report"""
         report = {
             'success': [],
             'failed': [],
@@ -172,10 +203,11 @@ class BulkProcessor:
             report['success_rate'] = round(
                 (report['success_count'] / report['total_processed']) * 100, 2
             )
-            
-        self.logger.info(
-            f"Final report: {report['success_count']} ✅ | "
-            f"{report['failure_count']} ❌ | "
-            f"Success rate: {report['success_rate']}%"
+
+        logger.info(
+            "Processing complete: "
+            f"{report['success_count']} succeeded, "
+            f"{report['failure_count']} failed "
+            f"(Success rate: {report['success_rate']}%)"
         )
         return report
