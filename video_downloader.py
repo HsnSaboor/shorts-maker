@@ -24,6 +24,8 @@ def download_video(video_id: str, progress_callback: Optional[Callable] = None) 
         command = [
             'yt-dlp',
             '-f', 'bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[height<=1080][ext=mp4]/best',
+            '--concurrent-fragments', '32',
+            '--http-chunk-size', '100M',
             '-o', str(output_path),
             '--progress',  # Show progress bar
             f'https://www.youtube.com/watch?v={video_id}'
