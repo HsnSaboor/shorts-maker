@@ -14,7 +14,7 @@ def cut_video_into_clips(video_path: str, clips: List[Dict], output_dir: str) ->
     """Split video into clips with detailed progress tracking"""
     try:
         logger.info("✂️ Starting video clipping process")
-        logger.debug(f"📁 Source video: {video_path}")
+        logger.debug(f"📁 Source video: {final_path}")
         logger.debug(f"🎞️ Clips to create: {len(clips)}")
         
         output_dir = Path(output_dir)
