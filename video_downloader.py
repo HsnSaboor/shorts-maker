@@ -10,112 +10,107 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-class VideoDownloader:
-    def __init__(self):
-        self.last_progress = 0
+def download_video(video_id: str, progress_callback: Optional[Callable] = None) -> Optional[str]:
+    """Download YouTube video with real-time progress tracking"""
+    try:
+        logger.info(f"🎬 Starting download for video: {video_id}")
+        output_dir = Path("temp_videos")
+        output_dir.mkdir(exist_ok=True)
+        base_path = output_dir / video_id
+        final_path = base_path.with_suffix('.mp4')
 
-    def _execute_command(self, command: list, progress_prefix: str) -> bool:
-        """Execute download command with single-line progress updates"""
-        try:
-            process = subprocess.Popen(
-                command,
-                stdout=subprocess.PIPE,
-                stderr=subprocess.STDOUT,
-                universal_newlines=True
-            )
-
-            while True:
-                line = process.stdout.readline()
-                if not line:
-                    break
-                line = line.strip()
-                if line and "[download]" in line and "%" in line:
-                    parts = line.replace("[download]", "").strip().split()
-                    progress = f"{progress_prefix}: {parts[0]} | Size: {parts[1]} | Speed: {parts[3]}/s | ETA: {parts[5]}"
-                    print(f"\r{progress.ljust(80)}", end='', flush=True)
-
-            process.wait()
-            return process.returncode == 0
-
-        except Exception as e:
-            logger.error(f"Command execution failed: {str(e)}")
-            return False
-
-    def _merge_streams(self, base_path: Path, final_path: Path) -> None:
-        """Merge separate audio/video streams using FFmpeg"""
-        video_file = next(base_path.parent.glob(f"{base_path.name}_video.*"))
-        audio_file = next(base_path.parent.glob(f"{base_path.name}_audio.*"))
-        
-        merge_command = [
-            'ffmpeg',
-            '-i', str(video_file),
-            '-i', str(audio_file),
-            '-c', 'copy',
-            '-loglevel', 'error',
-            '-y',
-            str(final_path)
+        # Video download command with high concurrency
+        video_command = [
+            'yt-dlp',
+            '-f', 'bestvideo[height<=1440][ext=mp4]',  # 1440p max resolution
+            '--concurrent-fragments', '256',
+            '--http-chunk-size', '300M',
+            '-o', str(base_path) + '_video.%(ext)s',
+            '--progress',
+            f'https://www.youtube.com/watch?v={video_id}'
         ]
-        
-        subprocess.run(merge_command, check=True)
-        video_file.unlink()
-        audio_file.unlink()
-        logger.info(f"Merged streams to {final_path.name}")
 
-    def download_video(self, video_id: str) -> Optional[str]:
-        """Download video using optimized separate audio/video streams"""
-        try:
-            logger.info(f"Starting download for video: {video_id}")
-            output_dir = Path("temp_videos")
-            output_dir.mkdir(exist_ok=True)
-            base_path = output_dir / video_id
-            final_path = base_path.with_suffix('.mkv')
+        # Audio download command with lower concurrency
+        audio_command = [
+            'yt-dlp',
+            '-f', 'bestaudio[ext=m4a]',
+            '--concurrent-fragments', '8',
+            '-o', str(base_path) + '_audio.%(ext)s',
+            '--progress',
+            f'https://www.youtube.com/watch?v={video_id}'
+        ]
 
-            # Video download command
-            video_command = [
-                'yt-dlp',
-                '-f', 'bestvideo[height<=1440]',
-                '--concurrent-fragments', '256',
-                '--http-chunk-size', '300M',
-                '--no-simulate',
-                '-o', f"{base_path}_video.%(ext)s",
-                '--progress',
-                f'https://www.youtube.com/watch?v={video_id}'
-            ]
-
-            # Audio download command
-            audio_command = [
-                'yt-dlp',
-                '-f', 'bestaudio',
-                '--concurrent-fragments', '8',
-                '--no-simulate',
-                '-o', f"{base_path}_audio.%(ext)s",
-                '--progress',
-                f'https://www.youtube.com/watch?v={video_id}'
-            ]
-
-            # Download video
-            print()
-            video_success = self._execute_command(video_command, "Video Progress")
-            print()  # Newline after video progress
-            
-            # Download audio
-            audio_success = self._execute_command(audio_command, "Audio Progress")
-            print("\n")  # Newline after audio progress
-
-            if not (video_success and audio_success):
-                logger.error("Download failed for video or audio stream")
-                return None
-
-            # Merge streams
-            self._merge_streams(base_path, final_path)
-            
-            if final_path.exists():
-                size_mb = final_path.stat().st_size / (1024 * 1024)
-                logger.info(f"Download completed successfully ({size_mb:.1f} MB)")
-                return str(final_path)
-
+        # Download video
+        logger.info("⬇️ Starting video download")
+        if not _execute_command(video_command, progress_callback):
+            logger.error("❌ Video download failed")
             return None
 
-        except Exception as e:
-            logger.error(f"Download error: {str(e)}")
+        # Download audio
+        logger.info("🔊 Starting audio download")
+        if not _execute_command(audio_command, progress_callback):
+            logger.error("❌ Audio download failed")
             return None
+
+        # Merge streams
+        logger.info("🔀 Merging audio and video")
+        _merge_streams(base_path, final_path)
+
+        if final_path.exists():
+            size_mb = final_path.stat().st_size / 1024 / 1024
+            logger.info(f"✅ Successfully downloaded {final_path} ({size_mb:.2f} MB)")
+            return str(final_path)
+            
+        logger.error("❌ Merged file not found after successful download")
+        return None
+
+    except Exception as e:
+        logger.error(f"🔥 Unexpected download error: {str(e)}", exc_info=True)
+        return None
+
+def _execute_command(command: list, progress_callback: Optional[Callable]) -> bool:
+    """Execute download command with real-time progress handling"""
+    try:
+        process = subprocess.Popen(
+            command,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
+            universal_newlines=True
+        )
+
+        for line in process.stdout:
+            line = line.strip()
+            if line and "[download]" in line and "%" in line:
+                progress = line.split("[download]")[1].strip()
+                logger.info(f"📥 Download progress: {progress}")
+                if progress_callback:
+                    try:
+                        percent = float(progress.split("%")[0].strip())
+                        progress_callback(percent)
+                    except Exception as e:
+                        logger.warning(f"⚠️ Could not parse progress: {str(e)}")
+
+        process.wait()
+        return process.returncode == 0
+
+    except Exception as e:
+        logger.error(f"Command execution failed: {str(e)}")
+        return False
+
+def _merge_streams(base_path: Path, final_path: Path) -> None:
+    """Merge separate audio/video streams using FFmpeg"""
+    video_file = next(base_path.parent.glob(f"{base_path.name}_video.*"))
+    audio_file = next(base_path.parent.glob(f"{base_path.name}_audio.*"))
+    
+    merge_command = [
+        'ffmpeg',
+        '-i', str(video_file),
+        '-i', str(audio_file),
+        '-c', 'copy',
+        '-y',  # Overwrite without prompting
+        str(final_path)
+    ]
+    
+    subprocess.run(merge_command, check=True)
+    video_file.unlink()
+    audio_file.unlink()
