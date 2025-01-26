@@ -85,37 +85,42 @@ def main():
         logging.getLogger().addHandler(log_handler)
 
         try:
-            async def process():
-                processor = BulkProcessor(
-                    concurrency=concurrency,
-                    progress_callback=update_progress
-                )
-                results = await processor.process_sources(sources, lang, output_dir)
-                st.session_state.progress['total'] = results['total_processed']
-                zip_path = create_zip(output_dir)
-                st.session_state.progress['zip'] = True
-                st.session_state.results = results
-                st.session_state.zip_path = zip_path
+            # Create an async wrapper function
+            async def async_wrapper():
+                async def process():
+                    processor = BulkProcessor(
+                        concurrency=concurrency,
+                        progress_callback=update_progress
+                    )
+                    results = await processor.process_sources(sources, lang, output_dir)
+                    st.session_state.progress['total'] = results['total_processed']
+                    zip_path = create_zip(output_dir)
+                    st.session_state.progress['zip'] = True
+                    st.session_state.results = results
+                    st.session_state.zip_path = zip_path
 
-            async def update_progress(step_type: str, index: int, progress: float):
-                try:
-                    if step_type in ('video', 'audio'):
-                        key = 'download'
-                        current = st.session_state.progress['steps'].get(key, {}).get(index, {})
-                        current[step_type] = progress
-                        total_progress = (current.get('video', 0) + current.get('audio', 0)) / 2
-                        if current.get('video', 0) >= 100 and current.get('audio', 0) >= 100:
-                            total_progress = 100.0
-                    else:
-                        key = step_type
-                        total_progress = progress
+                async def update_progress(step_type: str, index: int, progress: float):
+                    try:
+                        if step_type in ('video', 'audio'):
+                            key = 'download'
+                            current = st.session_state.progress['steps'].get(key, {}).get(index, {})
+                            current[step_type] = progress
+                            total_progress = (current.get('video', 0) + current.get('audio', 0)) / 2
+                            if current.get('video', 0) >= 100 and current.get('audio', 0) >= 100:
+                                total_progress = 100.0
+                        else:
+                            key = step_type
+                            total_progress = progress
 
-                    st.session_state.progress['steps'].setdefault(key, {})[index] = total_progress
-                    st.experimental_rerun()
-                except Exception as e:
-                    logging.error(f"Progress update failed: {str(e)}")
+                        st.session_state.progress['steps'].setdefault(key, {})[index] = total_progress
+                        st.experimental_rerun()
+                    except Exception as e:
+                        logging.error(f"Progress update failed: {str(e)}")
 
-            await process()
+                await process()
+
+            # Run the async wrapper with asyncio
+            asyncio.run(async_wrapper())
 
         except Exception as e:
             logging.error(f"Processing failed: {str(e)}")
