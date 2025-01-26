@@ -43,55 +43,57 @@ def main():
     # Progress bar
     progress_bar = st.progress(st.session_state.progress)
     
-    # Processing control
+    # In your Streamlit app code (modified section)
     if st.button("Start Processing") and not st.session_state.processing:
         st.session_state.processing = True
         st.session_state.progress = 0
         
         try:
             # Get video IDs
-            ids = []
-            if video_ids:
-                ids.extend([i.strip() for i in video_ids.split(",") if i.strip()])
+            ids = [i.strip() for i in video_ids.split(",") if i.strip()]
             if uploaded_file:
-                ids.extend([i.strip() for i in uploaded_file.read().decode().split(",")])
+                ids += [i.strip() for i in uploaded_file.read().decode().split(",")]
             
             if not ids:
-                st.error("Please provide at least one valid Video ID")
+                st.error("Please enter at least one video ID")
                 return
                 
-            # Process videos
+            # Processing pipeline
             with tempfile.TemporaryDirectory() as temp_dir:
                 processor = BulkProcessor(concurrency=concurrency)
-                
-                # Create wrapper for progress updates
-                def update_progress(percent: float):
-                    st.session_state.progress = percent / 100  # Convert to 0-1 scale
-                    progress_bar.progress(st.session_state.progress)
-                
-                # Process videos (would need to modify BulkProcessor to accept progress callback)
                 results = asyncio.run(processor.process_sources(
                     ids, lang, temp_dir, transcript_enabled
                 ))
                 
-                # Create ZIP package
+                # Create ZIP package while still in temp directory context
                 zip_buffer = io.BytesIO()
-                with zipfile.ZipFile(zip_buffer, 'w') as zip_file:
+                file_count = 0
+                
+                with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+                    # Collect all successful clips
                     for result in results['success']:
                         clip_dir = Path(result['clip_dir'])
-                        for clip_file in clip_dir.glob("*.mp4"):
-                            zip_file.write(clip_file, arcname=clip_file.name)
-                            if transcript_enabled:
-                                transcript_file = clip_file.with_suffix('.json')
-                                if transcript_file.exists():
-                                    zip_file.write(transcript_file, arcname=transcript_file.name)
+                        
+                        # Recursive search for all clip files
+                        for clip_file in clip_dir.glob('**/*'):
+                            if clip_file.is_file():
+                                arcname = clip_file.relative_to(temp_dir)
+                                zip_file.write(clip_file, arcname=arcname)
+                                file_count += 1
+                                logger.info(f"Added to ZIP: {arcname}")
                 
-                st.session_state.zip_data = zip_buffer.getvalue()
-                st.success("Processing completed successfully!")
+                if file_count == 0:
+                    st.error("No clips found to zip!")
+                    return
+                    
+                st.session_state.zip_buffer = zip_buffer.getvalue()
+                logger.info(f"Created ZIP with {file_count} files ({len(st.session_state.zip_buffer)} bytes)")
                 
+                st.session_state.processing = False
+    
         except Exception as e:
             st.error(f"Processing failed: {str(e)}")
-        finally:
+            logger.exception("Processing error")
             st.session_state.processing = False
 
     # Download section
