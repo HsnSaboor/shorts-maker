@@ -20,12 +20,14 @@ def format_size(size_bytes: int) -> str:
         size_bytes /= 1024
     return f"{size_bytes:.2f} GB"
 
-def create_zip(output_dir: str) -> str:
-    zip_path = os.path.join(output_dir, "clips_with_transcripts.zip")
+def create_zip(output_dir: str, include_transcripts: bool = True) -> str:
+    zip_name = "clips_with_transcripts.zip" if include_transcripts else "clips.zip"
+    zip_path = os.path.join(output_dir, zip_name)
     with zipfile.ZipFile(zip_path, 'w') as zipf:
         for root, _, files in os.walk(output_dir):
             for file in files:
-                if file.endswith(('.mp4', '.json', '.svg')):
+                # Only include .json files if transcripts are enabled
+                if file.endswith('.mp4') or file.endswith('.svg') or (include_transcripts and file.endswith('.json')):
                     file_path = os.path.join(root, file)
                     relative_path = os.path.relpath(file_path, output_dir)
                     zipf.write(file_path, relative_path)
@@ -92,11 +94,12 @@ processor = BulkProcessor(
     include_transcripts=include_transcripts
 )
 results = processor.process_sources(sources, lang if include_transcripts else None, output_dir)
-            results = processor.process_sources(sources, lang, output_dir)
-            zip_path = create_zip(output_dir)
+            results = processor.process_sources(sources, lang if include_transcripts else None, output_dir)
+            zip_path = create_zip(output_dir, include_transcripts)
             st.session_state.progress['zip'] = True
             st.session_state.results = results
             st.session_state.zip_path = zip_path
+            st.session_state.include_transcripts = include_transcripts
 
         except Exception as e:
             logging.error(f"Processing failed: {str(e)}")
@@ -135,10 +138,12 @@ results = processor.process_sources(sources, lang if include_transcripts else No
         st.metric("Final ZIP Size", zip_size)
         
         with open(st.session_state.zip_path, "rb") as f:
+            button_text = "📥 Download Clips" + (" with Transcripts" if st.session_state.get('include_transcripts', True) else "")
+            file_name = "clips_with_transcripts.zip" if st.session_state.get('include_transcripts', True) else "clips.zip"
             st.download_button(
-                "📥 Download All Clips",
+                button_text,
                 data=f,
-                file_name="clips_with_transcripts.zip",
+                file_name=file_name,
                 mime="application/zip"
             )
 
