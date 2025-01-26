@@ -4,6 +4,7 @@ import logging
 from pathlib import Path
 from typing import List, Dict, Optional, Callable, Awaitable
 from youtube_search import Playlist, Channel
+from youtube_source_resolver import get_playlist_video_ids, get_channel_video_ids
 from transcript_utils import save_clip_transcripts, extract_clip_transcripts
 from video_downloader import download_video
 from transcript import fetch_transcript
