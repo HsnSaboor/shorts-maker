@@ -7,7 +7,7 @@ from youtube_search import get_playlist_video_ids, get_channel_video_ids
 from transcript_utils import save_clip_transcripts, extract_clip_transcripts
 from transcript import fetch_transcript
 from heatmap import process_video
-from video_downloader import download_video, get_video_info
+from video_downloader import download_video
 from video_splitter import cut_video_into_clips
 
 class BulkProcessor:
