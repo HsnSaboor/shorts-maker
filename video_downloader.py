@@ -22,17 +22,47 @@ def download_video(video_id: str, progress_callback: Optional[Callable] = None) 
         logger.info("⚙️ Configuring yt-dlp parameters")
 
         command = [
-    'yt-dlp',
-    '-f', 'bestvideo[height<=1440][vcodec^=vp09][ext=webm]+bestaudio[ext=webm]/'
-          'bestvideo[height<=1440][ext=webm]+bestaudio[ext=webm]/'
-          'bestvideo[height<=1440]+bestaudio',
-    '--merge-output-format', 'webm',
-    '--concurrent-fragments', '64',
-    '--http-chunk-size', '64M',
-    '--no-simulate',
-    '-o', str(output_path),
-    f'https://www.youtube.com/watch?v={video_id}'
-]
+            'yt-dlp',
+            
+            # Format selection (prioritizes AV1 > VP9 > AVC)
+            '-f', '(bestvideo[height<=1440][vcodec^=av01][fps>30]/'
+                  'bestvideo[height<=1440][vcodec^=vp09][ext=webm]/'
+                  'bestvideo[height<=1440][vcodec^=avc1])+bestaudio',
+            
+            # Merge settings
+            '--merge-output-format', 'webm',
+            
+            # Turbo download parameters
+            '--concurrent-fragments', '256',  # Max allowed fragments
+            '--http-chunk-size', '200M',      # Larger chunks for big videos
+            '--downloader', 'aria2c',
+            '--downloader-args', 'aria2c:-x 128 -s 256 -k 500M -j 128 --file-allocation=falloc --optimize-concurrent-downloads=true',
+            
+            # Live stream enhancements
+            '--live-from-start',
+            '--wait-for-video', '30',         # Longer wait for unstable streams
+            '--hls-use-mpegts',               # Better live stream handling
+            
+            # Performance tweaks
+            '--no-part',                      # Avoid partial files
+            '--throttled-rate', '100M',       # Skip throttled fragments
+            '--retries', 'infinite',
+            '--fragment-retries', 'infinite',
+            '--buffered-fragments', '256',    # Keep more in memory
+            
+            # Network optimizations
+            '--socket-timeout', '60',
+            '--source-address', '0.0.0.0',    # Bypass connection limits
+            '--force-ipv4',
+            '--limit-rate', '0',              # No rate limiting
+            
+            # Output control
+            '-o', f'{output_path}.%(ext)s',
+            '--no-simulate',
+            '--no-playlist',
+            
+            f'https://www.youtube.com/watch?v={video_id}'
+        ]
 
         logger.debug(f"🔧 Executing command: {' '.join(command)}")
         
