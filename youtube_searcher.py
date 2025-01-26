@@ -1,79 +1,64 @@
-import os
 import logging
-import subprocess
-from pathlib import Path
-from typing import List, Dict, Optional
+from typing import List, Optional
+from youtubesearchpython import Playlist, ChannelsSearch, VideosSearch
 
-logging.basicConfig(
-    level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
-)
-logger = logging.getLogger(__name__)
+logging.basicConfig(level=logging.INFO)
 
-def cut_video_into_clips(video_path: str, clips: List[Dict], output_dir: str) -> Optional[List[str]]:
-    """Split video into clips with detailed progress tracking"""
+def get_playlist_video_ids(playlist_link: str) -> Optional[List[str]]:
+    """
+    Get all video IDs from a YouTube playlist.
+    
+    Args:
+        playlist_link: URL or ID of the YouTube playlist
+        
+    Returns:
+        List of video IDs or None if failed
+    """
     try:
-        logger.info("✂️ Starting video clipping process")
-        logger.debug(f"📁 Source video: {video_path}")
-        logger.debug(f"🎞️ Clips to create: {len(clips)}")
+        logging.info(f"Fetching videos from playlist: {playlist_link}")
+        playlist = Playlist(playlist_link)
         
-        output_dir = Path(output_dir)
-        logger.info(f"📂 Creating output directory: {output_dir}")
-        output_dir.mkdir(parents=True, exist_ok=True)
+        # Load all pages of the playlist
+        while playlist.hasMoreVideos:
+            playlist.getNextVideos()
         
-        clip_paths = []
-        for idx, clip in enumerate(clips, 1):
-            try:
-                logger.info(f"🔪 Processing clip {idx}/{len(clips)}")
-                output_path = output_dir / f"clip_{idx}.mp4"
-                start = clip['start']
-                duration = clip['end'] - start
-                logger.debug(f"⏱️ Clip timing: {start}s - {clip['end']}s ({duration}s)")
-
-                command = [
-                    'ffmpeg',
-                    '-ss', str(start),
-                    '-i', video_path,
-                    '-t', str(duration),
-                    '-c:v', 'copy',
-                    '-c:a', 'copy',
-                    '-y',
-                    '-hide_banner',
-                    '-loglevel', 'error',
-                    str(output_path)
-                ]
-                
-                logger.debug(f"🔧 Executing: {' '.join(command)}")
-                result = subprocess.run(
-                    command,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    text=True
-                )
-
-                if result.returncode != 0:
-                    logger.error(f"❌ Clip {idx} creation failed")
-                    logger.debug(f"🧠 FFmpeg error: {result.stderr[:500]}...")
-                    continue
-                    
-                if output_path.exists():
-                    size_mb = output_path.stat().st_size/1024/1024
-                    logger.info(f"✅ Created clip: {output_path.name} ({size_mb:.2f} MB)")
-                    clip_paths.append(str(output_path))
-                else:
-                    logger.error(f"❌ Missing output file: {output_path}")
-
-            except Exception as e:
-                logger.error(f"⚠️ Error processing clip {idx}: {str(e)}")
-                continue
-
-        if clip_paths:
-            logger.info(f"🎉 Successfully created {len(clip_paths)}/{len(clips)} clips")
-            return clip_paths
-            
-        logger.error("❌ Failed to create any clips")
+        return [video['id'] for video in playlist.videos]
+    
+    except Exception as e:
+        logging.error(f"Failed to get playlist videos: {str(e)}")
         return None
 
+def get_channel_video_ids(channel_identifier: str, limit: int = 10) -> Optional[List[str]]:
+    """
+    Get video IDs from a YouTube channel by name/username.
+    
+    Args:
+        channel_identifier: Channel name, username or URL
+        limit: Maximum number of videos to fetch
+        
+    Returns:
+        List of video IDs or None if failed
+    """
+    try:
+        logging.info(f"Searching for channel: {channel_identifier}")
+        
+        # First find the channel ID
+        channels_search = ChannelsSearch(channel_identifier, limit=1)
+        channel_result = channels_search.result()
+        
+        if not channel_result['result']:
+            logging.error("Channel not found")
+            return None
+            
+        channel_id = channel_result['result'][0]['id']
+        logging.info(f"Found channel ID: {channel_id}")
+        
+        # Now get channel videos
+        videos_search = VideosSearch("", limit=limit, channel_id=channel_id)
+        videos_result = videos_search.result()
+        
+        return [video['id'] for video in videos_result['result']]
+    
     except Exception as e:
-        logger.error(f"🔥 Critical clipping error: {str(e)}", exc_info=True)
+        logging.error(f"Failed to get channel videos: {str(e)}")
         return None
