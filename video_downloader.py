@@ -1,5 +1,4 @@
 import os
-import sys
 import subprocess
 import logging
 from pathlib import Path
@@ -12,199 +11,64 @@ logging.basicConfig(
 logger = logging.getLogger(__name__)
 
 def download_video(video_id: str, progress_callback: Optional[Callable] = None) -> Optional[str]:
-    """Download YouTube video with separate audio and video streams."""
+    """Download YouTube video with real-time progress tracking"""
     try:
         logger.info(f"🎬 Starting download for video: {video_id}")
         output_dir = Path("temp_videos")
         output_dir.mkdir(exist_ok=True)
-        logger.info(f"📂 Created output directory: {output_dir}")
+        output_path = output_dir / f"{video_id}.mp4"
+
+        logger.debug(f"📁 Target path: {output_path}")
+        logger.info("⚙️ Configuring yt-dlp parameters")
+
+        command = [
+            'yt-dlp',
+            '-f', 'bestvideo[height<=1080][ext=mp4]+bestaudio[ext=m4a]/best[height<=1080][ext=mp4]/best',
+            '-o', str(output_path),
+            '--progress',  # Show progress bar
+            f'https://www.youtube.com/watch?v={video_id}'
+        ]
+
+        logger.debug(f"🔧 Executing command: {' '.join(command)}")
         
-        # Base path for temp files
-        base_path = output_dir / video_id
-
-        # Define video and audio commands
-        video_command = [
-            'yt-dlp',
-            '-f', 'bestvideo[height<=1440][ext=mp4]',  # 1440p max resolution
-            '--concurrent-fragments', '256',
-            '--http-chunk-size', '300M',
-            '-o', str(base_path) + '_video.%(ext)s',
-            '--progress',
-            f'https://www.youtube.com/watch?v={video_id}'
-        ]
-
-        audio_command = [
-            'yt-dlp',
-            '-f', 'bestaudio[ext=m4a]',
-            '--concurrent-fragments', '8',
-            '-o', str(base_path) + '_audio.%(ext)s',
-            '--progress',
-            f'https://www.youtube.com/watch?v={video_id}'
-        ]
-
-        def execute_command(command: list) -> bool:
-            """Execute a command and handle its output."""
-            try:
-                logger.info(f"⚡ Executing command: {' '.join(command)}")
-                process = subprocess.Popen(
-                    command,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    universal_newlines=True,
-                    bufsize=1
-                )
-
-                while True:
-                    line = process.stdout.readline()
-                    if not line and process.poll() is not None:
-                        break
-                    line = line.strip()
-                    if line:  # Log any non-empty output
-                        if '/' in line and '|' in line and '%' in line:
-                            try:
-                                # Parse the progress information (format: bytes/total| percent|speed|eta)
-                                parts = line.strip().split('|')
-                                if len(parts) >= 4:
-                                    bytes_info = parts[0]
-                                    downloaded, total = bytes_info.split('/')
-                                    percent = parts[1].strip()
-                                    speed = parts[2]
-                                    eta = parts[3]
-
-                                    # Format bytes to appropriate unit
-                                    def format_size(bytes_size):
-                                        if bytes_size == 'NA':
-                                            return '0 MB'
-                                        bytes_num = float(bytes_size)
-                                        if bytes_num >= 1024 * 1024 * 1024:  # GB
-                                            return f"{bytes_num / 1024 / 1024 / 1024:.2f} GB"
-                                        else:  # MB
-                                            return f"{bytes_num / 1024 / 1024:.2f} MB"
-
-                                    def format_speed(speed_str):
-                                        if speed_str == 'NA':
-                                            return 'NA'
-                                        speed_num = float(speed_str)
-                                        if speed_num >= 1024 * 1024:  # Convert to MB/s
-                                            return f"{speed_num / 1024 / 1024:.2f} MB/s"
-                                        else:  # KB/s
-                                            return f"{speed_num / 1024:.2f} KB/s"
-
-                                    # Format values
-                                    downloaded_str = format_size(downloaded)
-                                    total_str = format_size(total)
-                                    speed_formatted = format_speed(speed)
-
-                                    # Print progress without timestamp using sys.stdout
-                                    progress_msg = f"\r📥 {percent} ({downloaded_str} / {total_str}) at {speed_formatted} ETA: {eta}"
-                                    sys.stdout.write(progress_msg)
-                                    sys.stdout.flush()
-
-                                    # Add newline when download completes
-                                    if percent.strip() == "100.0%":
-                                        sys.stdout.write("\n")
-                                        sys.stdout.flush()
-
-                                    # Update progress callback
-                                    if progress_callback:
-                                        try:
-                                            percent_value = float(percent.rstrip('%'))
-                                            progress_callback("download", percent_value)
-                                        except ValueError:
-                                            pass
-                            except (ValueError, IndexError) as e:
-                                logger.debug(f"Error parsing progress: {e}")
-                        else:
-                            # Handle youtube-dl info messages without timestamp
-                            if '[' in line and ']' in line:  # youtube-dl messages like [youtube] or [download]
-                                line = line.strip()
-                                print(f"{line}", flush=True)
-                            else:
-                                logger.info(f"📝 {line}")
-
-                stderr = process.stderr.read()
-                if stderr:
-                    logger.warning(f"⚠️ Process output: {stderr}")
-
-                process.wait()
-                success = process.returncode == 0
-                if success:
-                    logger.info("✅ Command executed successfully")
-                else:
-                    logger.error(f"❌ Command failed with return code {process.returncode}")
-                return success
-
-            except Exception as e:
-                logger.error(f"🔥 Command execution failed: {str(e)}", exc_info=True)
-                return False
-
-        # Download video
-        logger.info("⚙️ Starting video stream download...")
-        if not execute_command(video_command):
-            logger.error(f"❌ Video download failed for {video_id}")
-            return None
-        logger.info("✅ Video stream downloaded successfully")
-
-        # Download audio
-        logger.info("⚙️ Starting audio stream download...")
-        if not execute_command(audio_command):
-            logger.error(f"❌ Audio download failed for {video_id}")
-            return None
-        logger.info("✅ Audio stream downloaded successfully")
-
-        # Merge video and audio using ffmpeg
-        video_file = str(base_path) + "_video.mp4"
-        audio_file = str(base_path) + "_audio.m4a"
-        final_file = output_dir / f"{video_id}.mp4"
-
-        # Verify files exist before merging
-        if not Path(video_file).exists():
-            logger.error(f"❌ Video file not found: {video_file}")
-            return None
-        if not Path(audio_file).exists():
-            logger.error(f"❌ Audio file not found: {audio_file}")
-            return None
-
-        logger.info("🔧 Starting video and audio merge...")
-        merge_command = [
-            'ffmpeg',
-            '-y',  # Overwrite output file if it exists
-            '-i', video_file,
-            '-i', audio_file,
-            '-c:v', 'copy',  # Copy video codec
-            '-c:a', 'aac',   # Encode audio in AAC
-            str(final_file)
-        ]
-
-        logger.info(f"⚡ Executing merge command: {' '.join(merge_command)}")
-        merge_process = subprocess.run(
-            merge_command,
+        process = subprocess.Popen(
+            command,
             stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
+            stderr=subprocess.STDOUT,
             universal_newlines=True
         )
 
-        if merge_process.returncode != 0:
-            logger.error(f"❌ Failed to merge video and audio: {merge_process.stderr}")
+        # Process output in real-time
+        for line in process.stdout:
+            line = line.strip()
+            if line:
+                # Extract progress information
+                if "[download]" in line and "%" in line:
+                    progress = line.split("[download]")[1].strip()
+                    logger.info(f"📥 Download progress: {progress}")
+                    if progress_callback:
+                        try:
+                            # Extract percentage (e.g., "45.2%")
+                            percent = float(progress.split("%")[0].strip())
+                            progress_callback(percent)
+                        except Exception as e:
+                            logger.warning(f"⚠️ Could not parse progress: {str(e)}")
+
+        # Wait for process to complete
+        process.wait()
+
+        if process.returncode != 0:
+            logger.error(f"❌ Download failed for {video_id}")
             return None
 
-        # Verify final file exists
-        if not Path(final_file).exists():
-            logger.error("❌ Final merged file not found")
-            return None
-
-        logger.info(f"✅ Successfully downloaded and merged: {final_file}")
-        
-        # Clean up temporary files
-        try:
-            os.remove(video_file)
-            os.remove(audio_file)
-            logger.info("🧹 Cleaned up temporary files")
-        except Exception as e:
-            logger.warning(f"⚠️ Failed to clean up temporary files: {str(e)}")
-
-        return str(final_file)
+        if output_path.exists():
+            size_mb = output_path.stat().st_size / 1024 / 1024
+            logger.info(f"✅ Successfully downloaded {output_path} ({size_mb:.2f} MB)")
+            return str(output_path)
+            
+        logger.error("❌ Downloaded file not found after successful download")
+        return None
 
     except Exception as e:
-        logger.error(f"🔥 Unexpected error: {str(e)}", exc_info=True)
+        logger.error(f"🔥 Unexpected download error: {str(e)}", exc_info=True)
         return None
