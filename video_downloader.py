@@ -27,7 +27,7 @@ def download_video(video_id: str, progress_callback: Optional[Callable] = None) 
             '--concurrent-fragments', '256',
             '--http-chunk-size', '300M',
             '-o', str(base_path) + '_video.%(ext)s',
-            '--progress',
+            '--progress-template', '[download] %(progress._percent_str)s of %(total_bytes_str)s at %(speed_str)s ETA %(eta_str)s',
             f'https://www.youtube.com/watch?v={video_id}'
         ]
 
@@ -36,7 +36,7 @@ def download_video(video_id: str, progress_callback: Optional[Callable] = None) 
             '-f', 'bestaudio[ext=m4a]',
             '--concurrent-fragments', '8',
             '-o', str(base_path) + '_audio.%(ext)s',
-            '--progress',
+            '--progress-template', '[download] %(progress._percent_str)s of %(total_bytes_str)s at %(speed_str)s ETA %(eta_str)s',
             f'https://www.youtube.com/watch?v={video_id}'
         ]
 
@@ -52,14 +52,15 @@ def download_video(video_id: str, progress_callback: Optional[Callable] = None) 
 
                 for line in process.stdout:
                     line = line.strip()
-                    if "[download]" in line and "%" in line:
-                        progress = line.split("[download]")[1].strip()
+                    if "[download]" in line:
+                        progress = line.strip()
                         # Log progress and update UI
-                        line = f"📥 Download Progress: {progress}"
+                        line = f"📥 {progress}"
                         logger.info(line)
                         if progress_callback:
                             try:
-                                percent = float(progress.split('%')[0].strip())
+                                # Extract percentage from progress string formatted as "X% of Y"
+                                percent = float(progress.split()[0].rstrip('%'))
                                 progress_callback("download", percent)
                             except ValueError:
                                 pass
