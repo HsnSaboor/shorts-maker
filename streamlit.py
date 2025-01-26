@@ -26,22 +26,27 @@ def ensure_directory(path: str) -> Path:
     return path_obj
 
 def create_zip(output_dir: str) -> str:
-    """Create ZIP archive with proper validation"""
+    """Create ZIP archive with size tracking"""
     zip_path = os.path.join(output_dir, "clips_with_transcripts.zip")
     total_size = 0
     
     with zipfile.ZipFile(zip_path, 'w') as zipf:
         for root, _, files in os.walk(output_dir):
             for file in files:
-                if file.endswith(('.mp4', '.json')):
+                if file.endswith(('.mp4', '.json', '.svg')):
                     file_path = os.path.join(root, file)
                     relative_path = os.path.relpath(file_path, output_dir)
                     zipf.write(file_path, relative_path)
-                    total_size += os.path.getsize(file_path)
-                    logger.info(f"Added to ZIP: {relative_path}")
+                    file_size = os.path.getsize(file_path)
+                    total_size += file_size
+                    logger.info(f"📦 Added {relative_path} ({format_size(file_size)})")
+    
+    if total_size == 0:
+        logger.error("❌ Empty ZIP archive created")
+        return None
     
     zip_size = os.path.getsize(zip_path)
-    logger.info(f"ZIP creation complete. Size: {zip_size}")
+    logger.info(f"✅ ZIP creation complete. Total size: {format_size(zip_size)}")
     return zip_path
 
 def format_size(size_bytes: int) -> str:
@@ -58,6 +63,13 @@ def display_logs():
     if st.session_state.get('logs'):
         with st.expander("Processing Logs"):
             st.code("\n".join(st.session_state.logs))
+
+# Add this custom handler before your main function
+class SessionStateLogHandler(logging.Handler):
+    def emit(self, record):
+        log_entry = self.format(record)
+        if 'logs' in st.session_state:
+            st.session_state.logs.append(log_entry)
 
 def main():
     st.title("YouTube Bulk Video Clipper")
@@ -89,10 +101,14 @@ def main():
         text_input = st.text_input("Enter video IDs/URLs (comma-separated):")
         uploaded_file = st.file_uploader("Or upload text file", type=["txt"])
 
-    # Processing logic
     if process_btn and not st.session_state.processing:
         st.session_state.processing = True
         st.session_state.logs = []
+        
+        # Configure logging to UI
+        handler = SessionStateLogHandler()
+        handler.setFormatter(logging.Formatter('%(asctime)s - %(levelname)s - %(message)s'))
+        logging.getLogger().addHandler(handler)
         
         sources = []
         if uploaded_file:
@@ -115,10 +131,17 @@ def main():
             progress_bar = st.progress(0)
             status_text = st.empty()
             
-            # Async processing
-            results = asyncio.run(
-                processor.process_sources(sources, lang, str(output_path))
-            )
+            async def run_processing():
+                results = await processor.process_sources(sources, lang, str(output_path))
+                
+                # Final steps
+                status_text.info("📦 Packaging results...")
+                zip_path = create_zip(output_dir)
+                st.session_state.zip_path = zip_path
+                st.session_state.results = results
+                return results
+
+            results = asyncio.run(run_processing())
             
             # Create ZIP archive
             zip_path = create_zip(output_dir)
@@ -133,6 +156,7 @@ def main():
             logger.error(f"Processing failed: {str(e)}")
             st.error(f"Processing failed: {str(e)}")
         finally:
+            logging.getLogger().removeHandler(handler)
             st.session_state.processing = False
 
     # Results display
