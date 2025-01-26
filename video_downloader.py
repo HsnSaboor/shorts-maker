@@ -1,4 +1,3 @@
-import asyncio
 import re
 import subprocess
 import logging
@@ -111,8 +110,8 @@ def _merge_streams(video_id: str, video_file: Path, audio_file: Path, final_file
     logger.info(f"Merge completed for {video_id}")
     return str(final_file)
 
-async def download_video(video_id: str, progress_callback: Optional[Callable[[str, float], None]] = None) -> Optional[str]:
-    """Main async download function"""
+def download_video(video_id: str, progress_callback: Optional[Callable[[str, float], None]] = None) -> Optional[str]:
+    """Main download function"""
     try:
         output_dir = Path("temp_videos")
         output_dir.mkdir(exist_ok=True)
@@ -125,16 +124,8 @@ async def download_video(video_id: str, progress_callback: Optional[Callable[[st
                 progress_callback("audio", 100.0)
             return str(final_file)
 
-        loop = asyncio.get_running_loop()
-        video_file, audio_file = await loop.run_in_executor(
-            None, 
-            lambda: _download_streams(video_id, progress_callback)
-        )
-
-        final_path = await loop.run_in_executor(
-            None,
-            lambda: _merge_streams(video_id, video_file, audio_file, final_file)
-        )
+        video_file, audio_file = _download_streams(video_id, progress_callback)
+        final_path = _merge_streams(video_id, video_file, audio_file, final_file)
 
         return final_path
 
