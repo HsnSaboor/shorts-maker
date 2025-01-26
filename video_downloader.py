@@ -38,9 +38,7 @@ def download_video(video_id: str, progress_callback: Optional[Callable] = None) 
             '--downloader', 'aria2c',
             '--downloader-args', 'aria2c:-x 64 -s 256 -k 500M -j 64 --file-allocation=falloc --optimize-concurrent-downloads=true',
             
-            # Live stream enhancements
-            '--live-from-start',
-            '--wait-for-video', '30',         # Longer wait for unstable streams
+
             '--hls-use-mpegts',               # Better live stream handling
             
             # Performance tweaks
