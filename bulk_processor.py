@@ -76,7 +76,7 @@ class BulkProcessor:
                 # Stage 6: Video clipping
                 self.logger.info("🎬 Cutting video into clips")
                 clip_dir = video_output_dir / "clips"
-                clip_paths = cut_video_into_clips(video_path, clips, str(clip_dir))
+                clip_paths = cut_video_into_clips(final_path, clips, str(clip_dir))
                 
                 if not clip_paths:
                     raise ValueError("❌ Video clipping failed")
@@ -89,14 +89,14 @@ class BulkProcessor:
                 
                 # Add relative paths for portability
                 for clip, path in zip(processed_clips, clip_paths):
-                    clip['video_path'] = str(Path(path).relative_to(output_dir))
+                    clip['final_path'] = str(Path(path).relative_to(output_dir))
 
                 self.logger.info(f"💡 Successfully processed {video_id}")
                 return {
                     'video_id': video_id,
                     'status': 'success',
                     'clips': len(clip_paths),
-                    'video_path': str(video_path),
+                    'final_path': str(final_path),
                     'clip_dir': str(clip_dir),
                     'transcript_path': str(transcript_path)
                 }
