@@ -36,11 +36,11 @@ class BulkProcessor:
                 video_output_dir.mkdir(parents=True, exist_ok=True)
 
                 # Stage 2: Video download
-                self.logger.info(f"⬇️ Downloading video {video_id}")
-                video_path = download_video(video_id)
-                if not video_path or not Path(video_path).exists():
+                self.logger.info(f"⬇️ Starting video download...")
+                final_path = download_video(video_id)
+                if not final_path or not Path(final_path).exists():
                     raise ValueError(f"❌ Video download failed for {video_id}")
-                self.logger.info(f"✅ Successfully downloaded video to: {video_path}")
+                self.logger.info(f"✅ Successfully downloaded video to: {final_path}")
 
                 # Stage 3: Transcript processing
                 self.logger.info(f"📝 Fetching transcript for {video_id}")
