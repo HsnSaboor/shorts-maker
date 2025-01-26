@@ -90,25 +90,32 @@ def download_video(video_id: str, progress_callback: Optional[Callable] = None) 
 
 def run_download_command(command: list, progress_callback: Callable, 
                         start: float, range: float) -> bool:
-    """Run a download command with progress tracking"""
+    """Run a download command with real-time logging and progress tracking"""
     try:
         process = subprocess.Popen(
             command,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
-            universal_newlines=True
+            universal_newlines=True,
+            bufsize=1  # Line buffered output
         )
 
         for line in process.stdout:
             line = line.strip()
-            if line and "[download]" in line and "%" in line:
-                try:
-                    percent = float(line.split("%")[0].split()[-1])
-                    scaled = start + (percent * range / 100)
-                    if progress_callback:
-                        progress_callback(scaled)
-                except Exception as e:
-                    logger.warning(f"⚠️ Progress parse error: {str(e)}")
+            if line:
+                # Log the raw output line
+                logger.info(f"yt-dlp: {line}")
+                
+                # Handle progress updates
+                if "[download]" in line and "%" in line:
+                    try:
+                        percent_str = line.split("%")[0].split()[-1]
+                        percent = float(percent_str)
+                        scaled = start + (percent * range / 100)
+                        if progress_callback:
+                            progress_callback(scaled)
+                    except (ValueError, IndexError) as e:
+                        logger.warning(f"⚠️ Progress parse error: {str(e)}")
 
         process.wait()
         return process.returncode == 0
