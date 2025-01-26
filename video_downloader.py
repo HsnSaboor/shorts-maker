@@ -40,9 +40,12 @@ def download_video(video_id: str, progress_callback: Optional[Callable] = None) 
             f'https://www.youtube.com/watch?v={video_id}'
         ]
 
-        def execute_command(command: list) -> bool:
-            """Execute a command and handle its output."""
+        def execute_command(command: list, stream_type: str) -> bool:
+            """Execute a command with single-line progress updates"""
             try:
+                # Print initial message without newline
+                print(f"⚙️ Downloading {stream_type} stream... ", end="", flush=True)
+                
                 process = subprocess.Popen(
                     command,
                     stdout=subprocess.PIPE,
@@ -50,23 +53,23 @@ def download_video(video_id: str, progress_callback: Optional[Callable] = None) 
                     universal_newlines=True
                 )
 
+                last_progress = ""
                 for line in process.stdout:
                     line = line.strip()
                     if "[download]" in line and "%" in line:
+                        # Extract progress percentage
                         progress = line.split("[download]")[1].strip()
-                        # Print progress on the same line
-                        print(f"\r📥 {progress}", end="")
-                        if progress_callback:
-                            try:
-                                percent = float(progress.split('%')[0].strip())
-                                progress_callback(percent)
-                            except ValueError:
-                                pass
+                        if progress != last_progress:
+                            print(f"\r⚙️ Downloading {stream_type} stream... {progress}", end="", flush=True)
+                            last_progress = progress
 
                 process.wait()
+                # Move to new line after completion
+                print()
                 return process.returncode == 0
+                
             except Exception as e:
-                logger.error(f"🔥 Command execution failed: {str(e)}", exc_info=True)
+                logger.error(f"Command execution failed: {str(e)}")
                 return False
 
         # Download video
