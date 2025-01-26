@@ -1,196 +1,202 @@
-# main.py (updated with folder creation)
 import streamlit as st
 import asyncio
 import json
 import logging
 import zipfile
-from pathlib import Path
-from typing import List, Dict, Optional, Callable
-import shutil
 import os
-
+import humanize
+from pathlib import Path
+from typing import List, Dict, Optional
 from bulk_processor import BulkProcessor
+
+# Configure logging to show in Streamlit
+logging.basicConfig(
+    level=logging.INFO,
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[logging.StreamHandler()]
+)
+logger = logging.getLogger(__name__)
+
 
 os.system("playwright install")
 
-# Configure logging
-logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger(__name__)
-
-def ensure_directory_exists(path: str) -> Path:
-    """Ensure directory exists, create if it doesn't"""
-    path = Path(path)
-    path.mkdir(parents=True, exist_ok=True)
-    return path
-
-def get_sources_from_input(text_input: str, uploaded_file) -> List[str]:
-    """Extract sources from both text input and uploaded file"""
-    sources = []
-    
-    if uploaded_file is not None:
-        file_contents = uploaded_file.read().decode()
-        sources += [line.strip() for line in file_contents.split('\n') if line.strip()]
-    
-    if text_input:
-        sources += [src.strip() for src in text_input.split(',') if src.strip()]
-    
-    return list(set(sources))  # Remove duplicates
-
-async def async_process_sources(processor, sources, lang, output_dir):
-    """Wrapper for async processing"""
-    return await processor.process_sources(sources, lang, output_dir)
+def ensure_directory(path: str) -> Path:
+    """Create directory if it doesn't exist"""
+    path_obj = Path(path)
+    path_obj.mkdir(parents=True, exist_ok=True)
+    return path_obj
 
 def create_zip(output_dir: str) -> str:
-    """Package results into ZIP with proper path handling"""
+    """Create ZIP archive with proper validation"""
     zip_path = os.path.join(output_dir, "clips_with_transcripts.zip")
+    total_size = 0
     
     with zipfile.ZipFile(zip_path, 'w') as zipf:
-        for root, dirs, files in os.walk(output_dir):
-            # Skip existing ZIP files
-            if root == output_dir and "clips_with_transcripts.zip" in files:
-                files.remove("clips_with_transcripts.zip")
-                
+        for root, _, files in os.walk(output_dir):
             for file in files:
                 if file.endswith(('.mp4', '.json')):
                     file_path = os.path.join(root, file)
                     relative_path = os.path.relpath(file_path, output_dir)
-                    zipf.write(file_path, arcname=relative_path)
-                    logging.info(f"Added to ZIP: {relative_path}")
+                    zipf.write(file_path, relative_path)
+                    total_size += os.path.getsize(file_path)
+                    logger.info(f"Added to ZIP: {relative_path}")
     
-    # Verify ZIP contents
-    with zipfile.ZipFile(zip_path, 'r') as zip_ref:
-        file_list = zip_ref.namelist()
-        logging.info(f"ZIP contains {len(file_list)} files")
-        
+    zip_size = os.path.getsize(zip_path)
+    logger.info(f"ZIP creation complete. Size: {humanize.naturalsize(zip_size)}")
     return zip_path
+
+def display_logs():
+    """Show processing logs in Streamlit"""
+    if st.session_state.get('logs'):
+        with st.expander("Processing Logs"):
+            st.code("\n".join(st.session_state.logs))
 
 def main():
     st.title("YouTube Bulk Video Clipper")
-    st.markdown("Process multiple YouTube videos to extract high-attention clips with transcripts")
-
-    # Sidebar for inputs
-    with st.sidebar:
-        st.header("Processing Settings")
-        lang = st.text_input("Language Code", value="en")
-        concurrency = st.slider("Concurrency Level", 1, 8, 4)
-        output_dir = st.text_input("Output Directory", value="bulk_output")
-
-    # Main content area
-    col1, col2 = st.columns([3, 1])
+    st.markdown("Extract high-attention clips with transcripts from multiple YouTube videos")
     
-    with col1:
-        st.subheader("Input Sources")
-        text_input = st.text_input("Enter comma-separated video IDs/URLs:")
-        uploaded_file = st.file_uploader("Or upload a text file", type=["txt"])
-        
-        process_btn = st.button("Start Processing")
-
-    # Initialize session state
+    # Session state initialization
     if 'processing' not in st.session_state:
         st.session_state.processing = False
     if 'results' not in st.session_state:
         st.session_state.results = None
     if 'zip_path' not in st.session_state:
         st.session_state.zip_path = None
+    if 'logs' not in st.session_state:
+        st.session_state.logs = []
 
+    # Sidebar controls
+    with st.sidebar:
+        st.header("Settings")
+        lang = st.text_input("Language Code", "en")
+        concurrency = st.slider("Concurrency", 1, 8, 4)
+        output_dir = st.text_input("Output Directory", "bulk_output")
+        process_btn = st.button("Start Processing")
+
+    # Main interface
+    col1, col2 = st.columns([3, 1])
+    
+    with col1:
+        st.subheader("Input Sources")
+        text_input = st.text_input("Enter video IDs/URLs (comma-separated):")
+        uploaded_file = st.file_uploader("Or upload text file", type=["txt"])
+
+    # Processing logic
     if process_btn and not st.session_state.processing:
         st.session_state.processing = True
-        st.session_state.results = None
-        st.session_state.zip_path = None
+        st.session_state.logs = []
         
-        sources = get_sources_from_input(text_input, uploaded_file)
+        sources = []
+        if uploaded_file:
+            sources += uploaded_file.read().decode().splitlines()
+        if text_input:
+            sources += text_input.split(',')
+        sources = [s.strip() for s in sources if s.strip()]
+
         if not sources:
             st.error("Please provide valid input sources")
             st.session_state.processing = False
             return
 
-        # Ensure output directory exists
         try:
-            output_path = ensure_directory_exists(output_dir)
-            temp_dir = ensure_directory_exists(os.path.join(output_dir, "temp"))
-            logs_dir = ensure_directory_exists(os.path.join(output_dir, "logs"))
-        except Exception as e:
-            st.error(f"Failed to create directories: {str(e)}")
-            st.session_state.processing = False
-            return
-
-        processor = BulkProcessor(concurrency=concurrency)
-
-        # Create progress bars
-        overall_progress = st.progress(0)
-        status_text = st.empty()
-
-        try:
+            # Setup directories
+            output_path = ensure_directory(output_dir)
+            processor = BulkProcessor(concurrency=concurrency)
+            
+            # Progress tracking
+            progress_bar = st.progress(0)
+            status_text = st.empty()
+            
+            # Async processing
             results = asyncio.run(
-                async_process_sources(processor, sources, lang, str(output_path))
+                processor.process_sources(sources, lang, str(output_path))
             )
             
-            st.session_state.results = results
+            # Create ZIP archive
             zip_path = create_zip(output_dir)
             st.session_state.zip_path = zip_path
+            st.session_state.results = results
             
-            status_text.success("Processing complete!")
-            overall_progress.progress(100)
+            # Final update
+            progress_bar.progress(100)
+            status_text.success("✅ Processing complete!")
             
         except Exception as e:
+            logger.error(f"Processing failed: {str(e)}")
             st.error(f"Processing failed: {str(e)}")
         finally:
             st.session_state.processing = False
 
+    # Results display
     if st.session_state.results:
         with col2:
-            st.subheader("Processing Summary")
-            st.metric("Total Processed", st.session_state.results['total_processed'])
-            st.metric("Success Count", st.session_state.results['success_count'])
-            st.metric("Failure Count", st.session_state.results['failure_count'])
-            st.metric("Success Rate", f"{st.session_state.results['success_rate']:.1f}%")
+            st.subheader("Summary")
+            res = st.session_state.results
+            st.metric("Total Videos", res['total_processed'])
+            st.metric("Successful", res['success_count'])
+            st.metric("Failed", res['failure_count'])
+            st.metric("Success Rate", f"{res['success_rate']:.1f}%")
             
             if st.session_state.zip_path:
+                zip_size = humanize.naturalsize(os.path.getsize(st.session_state.zip_path))
+                st.metric("ZIP File Size", zip_size)
                 with open(st.session_state.zip_path, "rb") as f:
                     st.download_button(
-                        label="Download All Clips + Transcripts",
+                        "📥 Download All",
                         data=f,
                         file_name="clips_with_transcripts.zip",
                         mime="application/zip"
                     )
 
-        st.subheader("Processed Clips")
+        st.subheader("Generated Clips")
         for success in st.session_state.results['success']:
             video_dir = Path(success['clip_dir'])
-            clips = list(video_dir.glob("*.mp4"))
+            transcript_path = video_dir.parent / "clip_transcripts.json"
             
-            st.markdown(f"### Video ID: {success['video_id']}")
-            st.caption(f"Clips created: {len(clips)}")
+            with open(transcript_path) as f:
+                transcripts = json.load(f)
+            
+            clips = list(video_dir.glob("*.mp4"))
+            st.markdown(f"### Video ID: `{success['video_id']}`")
             
             cols = st.columns(3)
-            for idx, clip_path in enumerate(clips):
+            for idx, (clip_path, transcript) in enumerate(zip(clips, transcripts)):
                 with cols[idx % 3]:
-                    st.video(str(clip_path))
+                    # Clip metadata
+                    start = transcript['start']
+                    end = transcript['end']
+                    duration = end - start
+                    attention = transcript.get('average_attention', 'N/A')
                     
-                    transcript_path = video_dir.parent / "clip_transcripts.json"
-                    with open(transcript_path) as f:
-                        transcripts = json.load(f)
-                    
-                    clip_transcript = transcripts[idx]['transcript']
-                    transcript_text = "\n".join(
-                        [f"{t['start']:.1f}s: {t['text']}" for t in clip_transcript]
-                    )
-                    
-                    # Download buttons
-                    with open(clip_path, "rb") as f:
-                        st.download_button(
-                            label=f"Download Clip {idx+1}",
-                            data=f,
-                            file_name=clip_path.name,
-                            mime="video/mp4"
+                    # Display card
+                    with st.container(border=True):
+                        st.video(str(clip_path))
+                        st.caption(f"⏱️ {start:.1f}s - {end:.1f}s ({duration:.1f}s)")
+                        st.caption(f"📈 Average Attention: {attention}%")
+                        
+                        # Download buttons
+                        with open(clip_path, "rb") as f:
+                            st.download_button(
+                                f"📥 Clip {idx+1}",
+                                data=f,
+                                file_name=clip_path.name,
+                                mime="video/mp4",
+                                key=f"clip_{idx}"
+                            )
+                        
+                        transcript_text = "\n".join(
+                            [f"{t['start']:.1f}s: {t['text']}" for t in transcript['transcript']]
                         )
-                    
-                    st.download_button(
-                        label=f"Download Transcript {idx+1}",
-                        data=transcript_text,
-                        file_name=f"transcript_{idx+1}.txt",
-                        mime="text/plain"
-                    )
+                        st.download_button(
+                            f"📝 Transcript {idx+1}",
+                            data=transcript_text,
+                            file_name=f"transcript_{idx+1}.txt",
+                            mime="text/plain",
+                            key=f"trans_{idx}"
+                        )
+
+    # Display logs
+    display_logs()
 
 if __name__ == "__main__":
     main()
