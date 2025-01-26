@@ -30,6 +30,14 @@ class BulkProcessor:
     ) -> Optional[Dict]:
         async with self.semaphore:
             try:
+
+                 # Create progress wrapper
+                def progress_callback(stream_type: str, progress: float):
+                    if self.progress_callback:
+                        asyncio.run_coroutine_threadsafe(
+                            self.progress_callback(stream_type, index, progress),
+                            loop=asyncio.get_running_loop()
+                        )
                 video_dir = Path(output_dir) / video_id
                 video_dir.mkdir(parents=True, exist_ok=True)
 
