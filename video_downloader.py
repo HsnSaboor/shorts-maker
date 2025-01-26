@@ -69,13 +69,32 @@ def download_video(video_id: str, progress_callback: Optional[Callable] = None) 
                                 speed = parts[2]
                                 eta = parts[3]
 
-                                # Format bytes to MB
-                                downloaded_mb = float(downloaded) / 1024 / 1024
-                                total_mb = float(total) / 1024 / 1024 if total != 'NA' else 0
-                                speed_formatted = f"{float(speed) / 1024 / 1024:.2f}MB/s" if speed != 'NA' else 'NA'
+                                # Format bytes to appropriate unit
+                                def format_size(bytes_size):
+                                    if bytes_size == 'NA':
+                                        return '0 MB'
+                                    bytes_num = float(bytes_size)
+                                    if bytes_num >= 1024 * 1024 * 1024:  # GB
+                                        return f"{bytes_num / 1024 / 1024 / 1024:.2f} GB"
+                                    else:  # MB
+                                        return f"{bytes_num / 1024 / 1024:.2f} MB"
+
+                                def format_speed(speed_str):
+                                    if speed_str == 'NA':
+                                        return 'NA'
+                                    speed_num = float(speed_str)
+                                    if speed_num >= 1024 * 1024 * 1024:  # GB/s
+                                        return f"{speed_num / 1024 / 1024 / 1024:.2f} GB/s"
+                                    else:  # MB/s
+                                        return f"{speed_num / 1024 / 1024:.2f} MB/s"
+
+                                # Format the values
+                                downloaded_str = format_size(downloaded)
+                                total_str = format_size(total)
+                                speed_formatted = format_speed(speed)
 
                                 # Create progress message
-                                progress_msg = f"📥 Progress: {percent} ({downloaded_mb:.2f}MB / {total_mb:.2f}MB) at {speed_formatted} ETA: {eta}"
+                                progress_msg = f"📥 Progress: {percent} ({downloaded_str} / {total_str}) at {speed_formatted} ETA: {eta}"
                                 logger.info(progress_msg)
 
                                 # Update progress callback
