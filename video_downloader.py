@@ -1,4 +1,5 @@
 import os
+import sys
 import subprocess
 import logging
 from pathlib import Path
@@ -94,9 +95,15 @@ def download_video(video_id: str, progress_callback: Optional[Callable] = None) 
                                     total_str = format_size(total)
                                     speed_formatted = format_speed(speed)
 
-                                    # Create user-friendly progress message
-                                    progress_msg = f"📥 Progress: {percent} ({downloaded_str} / {total_str}) at {speed_formatted} ETA: {eta}"
-                                    print(progress_msg, flush=True)
+                                    # Print progress without timestamp using sys.stdout
+                                    progress_msg = f"\r📥 {percent} ({downloaded_str} / {total_str}) at {speed_formatted} ETA: {eta}"
+                                    sys.stdout.write(progress_msg)
+                                    sys.stdout.flush()
+
+                                    # Add newline when download completes
+                                    if percent.strip() == "100.0%":
+                                        sys.stdout.write("\n")
+                                        sys.stdout.flush()
 
                                     # Update progress callback
                                     if progress_callback:
@@ -108,7 +115,12 @@ def download_video(video_id: str, progress_callback: Optional[Callable] = None) 
                             except (ValueError, IndexError) as e:
                                 logger.debug(f"Error parsing progress: {e}")
                         else:
-                            logger.info(f"📝 {line}")
+                            # Handle youtube-dl info messages without timestamp
+                            if '[' in line and ']' in line:  # youtube-dl messages like [youtube] or [download]
+                                line = line.strip()
+                                print(f"{line}", flush=True)
+                            else:
+                                logger.info(f"📝 {line}")
 
                 stderr = process.stderr.read()
                 if stderr:
