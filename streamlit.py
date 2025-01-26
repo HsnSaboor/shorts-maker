@@ -146,7 +146,7 @@ def main():
             st.metric("Success Rate", f"{res['success_rate']:.1f}%")
             
             if st.session_state.zip_path:
-                zip_size = humanize.naturalsize(os.path.getsize(st.session_state.zip_path))
+                zip_size = os.path.getsize(st.session_state.zip_path)
                 st.metric("ZIP File Size", zip_size)
                 with open(st.session_state.zip_path, "rb") as f:
                     st.download_button(
