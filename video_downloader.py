@@ -1,5 +1,4 @@
 import os
-import sys
 import subprocess
 import logging
 from pathlib import Path
@@ -9,7 +8,6 @@ logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s'
 )
-sys.stdout.flush()
 logger = logging.getLogger(__name__)
 
 def download_video(video_id: str, progress_callback: Optional[Callable] = None) -> Optional[str]:
@@ -56,9 +54,8 @@ def download_video(video_id: str, progress_callback: Optional[Callable] = None) 
                     line = line.strip()
                     if "[download]" in line and "%" in line:
                         progress = line.split("[download]")[1].strip()
-                        # Update progress in real-time
-                        sys.stdout.write(f"\r📥 Download Progress: {progress}")
-                        sys.stdout.flush()
+                        # Log progress
+                        logger.info(f"📥 Download Progress: {progress}")
                         if progress_callback:
                             try:
                                 percent = float(progress.split('%')[0].strip())
@@ -67,9 +64,6 @@ def download_video(video_id: str, progress_callback: Optional[Callable] = None) 
                                 pass
 
                 process.wait()
-                # Add newline after download completes
-                sys.stdout.write("\n")
-                sys.stdout.flush()
                 return process.returncode == 0
             except Exception as e:
                 logger.error(f"🔥 Command execution failed: {str(e)}", exc_info=True)
