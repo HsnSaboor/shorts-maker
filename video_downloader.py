@@ -59,7 +59,7 @@ def download_video(video_id: str, progress_callback: Optional[Callable] = None) 
                         if progress_callback:
                             try:
                                 percent = float(progress.split('%')[0].strip())
-                                progress_callback(percent)
+                                progress_callback("download", percent)
                             except ValueError:
                                 pass
 
