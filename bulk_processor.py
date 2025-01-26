@@ -53,6 +53,9 @@ class BulkProcessor:
                         'status': 'skipped',
                         'reason': 'No transcript available'
                     }
+    
+                # Add this critical line to parse the JSON
+                transcript = json.loads(transcript_json)
 
                 # Stage 4: Heatmap analysis
                 self.logger.info(f"🌡️ Analyzing heatmap for {video_id}")
