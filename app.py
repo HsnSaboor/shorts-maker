@@ -123,6 +123,14 @@ def main():
                 st.session_state.progress['zip'] = True
                 st.session_state.results = results
                 st.session_state.zip_path = zip_path
+            
+            # Run the async loop correctly
+            if process_btn and not st.session_state.processing:
+                st.session_state.processing = True
+                try:
+                    asyncio.run(process_wrapper())
+                finally:
+                    st.session_state.processing = False
 
             async def update_progress(step_type: str, index: int, progress: float):
                 """Update progress for individual video steps"""
