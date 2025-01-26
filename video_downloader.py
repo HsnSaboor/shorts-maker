@@ -29,8 +29,6 @@ def download_video(video_id: str, progress_callback: Optional[Callable] = None) 
     '--merge-output-format', 'webm',
     '--concurrent-fragments', '64',
     '--http-chunk-size', '64M',
-    '--downloader', 'aria2c',
-    '--downloader-args', 'aria2c:-x 16 -s 64 -k 100M',
     '--no-simulate',
     '--no-playlist',
     '-o', str(output_path),
