@@ -1,3 +1,4 @@
+# streamlit_app.py (updated progress handling)
 import streamlit as st
 import asyncio
 import json
@@ -7,7 +8,7 @@ import zipfile
 from pathlib import Path
 from typing import List
 import io
-import base64
+import time
 from bulk_processor import BulkProcessor
 
 os.system("playwright install")
@@ -16,163 +17,82 @@ os.system("playwright install")
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
-# Initialize session state
-if 'processed' not in st.session_state:
-    st.session_state.processed = False
-if 'clips' not in st.session_state:
-    st.session_state.clips = []
-if 'selected_clips' not in st.session_state:
-    st.session_state.selected_clips = set()
-if 'zip_data' not in st.session_state:
-    st.session_state.zip_data = None
-
-def get_video_ids(input_text, uploaded_file):
-    """Extract video IDs from text input or uploaded file"""
-    video_ids = []
-    
-    if uploaded_file:
-        text = uploaded_file.read().decode()
-        video_ids.extend([vid.strip() for vid in text.split(',') if vid.strip()])
-    
-    if input_text:
-        video_ids.extend([vid.strip() for vid in input_text.split(',') if vid.strip()])
-    
-    return list(set(video_ids))
-
-async def process_videos(video_ids, lang, output_dir, concurrency, transcript_enabled):
-    """Async processing wrapper"""
-    processor = BulkProcessor(concurrency=concurrency)
-    results = await processor.process_sources(
-        video_ids, lang, str(output_dir), transcript_enabled
-    )
-    return results
-
-def create_zip(clip_paths, transcript_paths):
-    """Create in-memory ZIP file with selected clips and transcripts"""
-    zip_buffer = io.BytesIO()
-    
-    with zipfile.ZipFile(zip_buffer, 'a', zipfile.ZIP_DEFLATED) as zip_file:
-        for clip_path in clip_paths:
-            zip_file.write(clip_path, arcname=Path(clip_path).name)
-            if Path(clip_path + '.json').exists():
-                zip_file.write(clip_path + '.json', 
-                             arcname=Path(clip_path + '.json').name)
-    
-    zip_buffer.seek(0)
-    return zip_buffer
-
 def main():
-    st.title("YouTube Bulk Video Clipper")
+    st.title("YouTube Bulk Video Processor")
     
+    # Session state initialization
+    if 'processing' not in st.session_state:
+        st.session_state.processing = False
+    if 'progress' not in st.session_state:
+        st.session_state.progress = 0
+
     # Sidebar controls
     with st.sidebar:
-        st.header("Processing Options")
-        concurrency = st.slider("Concurrency Level", 1, 10, 4)
-        lang = st.selectbox("Language", ["en", "es", "fr", "de", "ja"], index=0)
+        st.header("Processing Settings")
+        concurrency = st.slider("Concurrent Downloads", 1, 5, 2)
+        lang = st.selectbox("Transcript Language", ["en", "es", "fr", "de", "ja"])
         transcript_enabled = st.checkbox("Enable Transcripts", value=True)
+        st.info("Note: Higher concurrency requires more system resources")
+
+    # Main UI
+    st.header("Video Input")
+    video_ids = st.text_input("Enter YouTube Video IDs (comma-separated)")
+    uploaded_file = st.file_uploader("Or upload TXT file with IDs", type=["txt"])
     
-    # Main input area
-    st.header("Input Sources")
-    input_text = st.text_input("Enter Video IDs (comma-separated)")
-    uploaded_file = st.file_uploader("Or upload TXT file with Video IDs", 
-                                   type=["txt"])
+    # Progress bar
+    progress_bar = st.progress(st.session_state.progress)
     
-    # Process button
-    if st.button("Process Videos"):
-        video_ids = get_video_ids(input_text, uploaded_file)
+    # Processing control
+    if st.button("Start Processing") and not st.session_state.processing:
+        st.session_state.processing = True
+        st.session_state.progress = 0
         
-        if not video_ids:
-            st.error("Please provide at least one valid Video ID")
-            return
+        try:
+            # Get video IDs
+            ids = []
+            if video_ids:
+                ids.extend([i.strip() for i in video_ids.split(",") if i.strip()])
+            if uploaded_file:
+                ids.extend([i.strip() for i in uploaded_file.read().decode().split(",")])
             
-        with tempfile.TemporaryDirectory() as temp_dir:
-            with st.spinner("Processing videos..."):
-                try:
-                    results = asyncio.run(process_videos(
-                        video_ids, lang, temp_dir, concurrency, transcript_enabled
-                    ))
-                    
-                    # Collect all processed clips
-                    all_clips = []
+            if not ids:
+                st.error("Please provide at least one valid Video ID")
+                return
+                
+            # Process videos
+            with tempfile.TemporaryDirectory() as temp_dir:
+                processor = BulkProcessor(concurrency=concurrency)
+                
+                # Create wrapper for progress updates
+                def update_progress(percent: float):
+                    st.session_state.progress = percent / 100  # Convert to 0-1 scale
+                    progress_bar.progress(st.session_state.progress)
+                
+                # Process videos (would need to modify BulkProcessor to accept progress callback)
+                results = asyncio.run(processor.process_sources(
+                    ids, lang, temp_dir, transcript_enabled
+                ))
+                
+                # Create ZIP package
+                zip_buffer = io.BytesIO()
+                with zipfile.ZipFile(zip_buffer, 'w') as zip_file:
                     for result in results['success']:
                         clip_dir = Path(result['clip_dir'])
-                        for clip in result.get('clips', []):
-                            clip_path = clip_dir / clip['video_path']
-                            all_clips.append({
-                                'path': str(clip_path),
-                                'start': clip['start'],
-                                'end': clip['end'],
-                                'attention': clip['average_attention'],
-                                'transcript': str(clip_path) + '.json'
-                            })
-                    
-                    st.session_state.clips = all_clips
-                    st.session_state.selected_clips = set(range(len(all_clips)))
-                    st.session_state.processed = True
-                    
-                except Exception as e:
-                    st.error(f"Processing failed: {str(e)}")
-                    logger.exception("Processing error")
-
-    # Results display
-    if st.session_state.processed and st.session_state.clips:
-        st.header("Processed Clips")
-        
-        # Select all checkbox
-        col1, col2 = st.columns([1, 10])
-        with col1:
-            select_all = st.checkbox("Select All", value=True)
-        with col2:
-            if st.button("Create Download Package"):
-                selected_paths = [
-                    st.session_state.clips[i]['path']
-                    for i in st.session_state.selected_clips
-                ]
-                transcript_paths = [
-                    st.session_state.clips[i]['transcript']
-                    for i in st.session_state.selected_clips
-                    if transcript_enabled
-                ]
+                        for clip_file in clip_dir.glob("*.mp4"):
+                            zip_file.write(clip_file, arcname=clip_file.name)
+                            if transcript_enabled:
+                                transcript_file = clip_file.with_suffix('.json')
+                                if transcript_file.exists():
+                                    zip_file.write(transcript_file, arcname=transcript_file.name)
                 
-                zip_buffer = create_zip(selected_paths, transcript_paths)
                 st.session_state.zip_data = zip_buffer.getvalue()
-        
-        # Download button
-        if st.session_state.zip_data:
-            st.download_button(
-                label="Download ZIP",
-                data=st.session_state.zip_data,
-                file_name="clips_package.zip",
-                mime="application/zip"
-            )
-        
-        # Clip display
-        for idx, clip in enumerate(st.session_state.clips):
-            with st.expander(f"Clip {idx+1}: {clip['start']}-{clip['end']} seconds"):
-                col1, col2 = st.columns([1, 4])
+                st.success("Processing completed successfully!")
                 
-                with col1:
-                    # Clip selection checkbox
-                    selected = st.checkbox(
-                        f"Include in package", 
-                        value=select_all,
-                        key=f"clip_{idx}"
-                    )
-                    if selected:
-                        st.session_state.selected_clips.add(idx)
-                    else:
-                        st.session_state.selected_clips.discard(idx)
-                    
-                    st.write(f"**Attention Score:** {clip['attention']}%")
-                    st.write(f"**Duration:** {clip['end'] - clip['start']}s")
-                
-                with col2:
-                    try:
-                        with open(clip['path'], 'rb') as f:
-                            video_bytes = f.read()
-                        st.video(video_bytes)
-                    except FileNotFoundError:
-                        st.error("Clip video file not found")
+        except Exception as e:
+            st.error(f"Processing failed: {str(e)}")
+        finally:
+            st.session_state.processing = False
 
-if __name__ == "__main__":
-    main()
+    # Download section
+    if 'zip_data' in st.session_state and st.session_state.zip_data:
+        st.download
