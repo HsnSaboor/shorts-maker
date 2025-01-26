@@ -5,3 +5,4 @@ youtube-transcript-api
 yt-dlp
 youtube-search-python
 nest-asyncio
+ffmpeg-python
