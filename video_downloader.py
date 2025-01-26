@@ -3,7 +3,7 @@ import subprocess
 import logging
 import sys
 from pathlib import Path
-from typing import Optional, Callable
+from typing import Optional, Callable, Union
 
 logging.basicConfig(
     level=logging.INFO,
@@ -15,134 +15,139 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
-class ProgressUpdater:
-    def __init__(self):
-        self.last_line_length = 0
-
-    def update(self, message: str):
-        """Overwrite the current line with new progress"""
-        sys.stderr.write('\r' + ' ' * self.last_line_length + '\r')  # Clear previous line
-        sys.stderr.write(message)
-        sys.stderr.flush()
-        self.last_line_length = len(message)
-
-    def complete(self):
-        """Move to new line after completion"""
-        sys.stderr.write('\n')
-        sys.stderr.flush()
-
-def download_video(video_id: str, progress_callback: Optional[Callable] = None) -> Optional[str]:
-    """Download YouTube video with separate audio/video streams and merge them"""
-    progress = ProgressUpdater()
-    try:
-        logger.info(f"Starting download for video: {video_id}")
-        output_dir = Path("temp_videos")
-        output_dir.mkdir(exist_ok=True)
-        base_path = output_dir / video_id
-
-        # Define paths
-        video_path = base_path.with_name(f"{base_path.name}_video.mp4")
-        audio_path = base_path.with_name(f"{base_path.name}_audio.m4a")
-        final_path = base_path.with_name(f"{base_path.name}.mp4")
-
-        # Download video stream
-        video_command = [
-            'yt-dlp',
-            '-f', 'bestvideo[height<=1440][ext=mp4]',
-            '--concurrent-fragments', '256',
-            '--http-chunk-size', '300M',
-            '-o', str(video_path),
-            '--progress',
-            f'https://www.youtube.com/watch?v={video_id}'
-        ]
-        if not run_download_command(video_command, progress, progress_callback, 0, 50):
-            return None
-
-        # Download audio stream
-        audio_command = [
-            'yt-dlp',
-            '-f', 'bestaudio[ext=m4a]',
-            '--concurrent-fragments', '8',
-            '-o', str(audio_path),
-            '--progress',
-            f'https://www.youtube.com/watch?v={video_id}'
-        ]
-        if not run_download_command(audio_command, progress, progress_callback, 50, 50):
-            return None
-
-        # Merge streams
-        logger.info("Merging video and audio streams")
-        ffmpeg_command = [
-            'ffmpeg',
-            '-i', str(video_path),
-            '-i', str(audio_path),
-            '-c:v', 'copy',
-            '-c:a', 'aac',
-            '-strict', 'experimental',
-            '-y',
-            str(final_path)
-        ]
-        result = subprocess.run(
-            ffmpeg_command,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.PIPE,
-            text=True
-        )
+class VideoDownloader:
+    def __init__(self, output_dir: Union[str, Path] = "temp_videos"):
+        """Initialize downloader with output directory"""
+        self.output_dir = Path(output_dir)
+        self.output_dir.mkdir(parents=True, exist_ok=True)
         
-        if result.returncode != 0:
-            logger.error(f"Merge failed: {result.stderr[:500]}...")
-            return None
-
-        # Cleanup temporary files
-        video_path.unlink(missing_ok=True)
-        audio_path.unlink(missing_ok=True)
-
-        if final_path.exists():
-            size_mb = final_path.stat().st_size / 1024 / 1024
-            logger.info(f"Successfully downloaded {final_path} ({size_mb:.2f} MB)")
-            return str(final_path)
+    def _create_progress_handler(self, progress_callback: Optional[Callable] = None) -> Callable:
+        """Create progress handler compatible with both CLI and GUI"""
+        if progress_callback:
+            return progress_callback
             
-        logger.error("Merged file not found")
+        # Default CLI progress handler
+        class CLIProgress:
+            def __init__(self):
+                self.last_line_length = 0
+
+            def __call__(self, percent: float):
+                msg = f"Download progress: {percent:.1f}%"
+                sys.stderr.write('\r' + ' ' * self.last_line_length + '\r')
+                sys.stderr.write(msg)
+                sys.stderr.flush()
+                self.last_line_length = len(msg)
+
+            def complete(self):
+                sys.stderr.write('\n')
+                sys.stderr.flush()
+
+        return CLIProgress()
+
+    def download_video(self, video_id: str, progress_callback: Optional[Callable] = None) -> Optional[Path]:
+        """Download YouTube video with progress reporting
+        
+        Args:
+            video_id: YouTube video ID
+            progress_callback: Callback function accepting percentage (0-100)
+            
+        Returns:
+            Path to downloaded video file or None if failed
+        """
+        progress = self._create_progress_handler(progress_callback)
+        base_path = self.output_dir / video_id
+        
+        try:
+            final_path = base_path.with_name(f"{base_path.name}.mp4")
+            
+            # Use cached file if available
+            if final_path.exists():
+                logger.info(f"Using cached video: {final_path}")
+                return final_path
+
+            # Configure yt-dlp command for best quality with merged audio
+            command = [
+                'yt-dlp',
+                '-f', 'bestvideo[height<=1440][ext=mp4]+bestaudio[ext=m4a]/best[height<=1440][ext=mp4]',
+                '--concurrent-fragments', '256',
+                '--http-chunk-size', '300M',
+                '-o', str(base_path) + ".%(ext)s",
+                '--merge-output-format', 'mp4',
+                '--progress',
+                f'https://www.youtube.com/watch?v={video_id}'
+            ]
+
+            process = subprocess.Popen(
+                command,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.STDOUT,
+                universal_newlines=True,
+                bufsize=1
+            )
+
+            # Process output in real-time
+            for line in process.stdout:
+                line = line.strip()
+                if line:
+                    self._process_line(line, progress)
+
+            # Check completion status
+            process.wait()
+            if process.returncode != 0:
+                logger.error(f"Download failed for {video_id}")
+                return None
+
+            # Find and rename output file
+            return self._handle_output_file(video_id, final_path)
+
+        except Exception as e:
+            logger.error(f"Download error: {str(e)}")
+            return None
+        finally:
+            # Cleanup progress display
+            if callable(progress) and hasattr(progress, 'complete'):
+                progress.complete()
+
+    def _process_line(self, line: str, progress: Callable):
+        """Parse yt-dlp output and update progress"""
+        if "[download]" in line and "%" in line:
+            try:
+                percent_str = line.split("%")[0].split()[-1]
+                percent = float(percent_str)
+                progress(percent)
+            except (ValueError, IndexError) as e:
+                logger.debug(f"Progress parse error: {str(e)}")
+        else:
+            logger.info(f"yt-dlp: {line}")
+
+    def _handle_output_file(self, video_id: str, final_path: Path) -> Optional[Path]:
+        """Handle output file renaming and validation"""
+        # Find any generated video files
+        for f in self.output_dir.glob(f"{video_id}.*"):
+            if f.suffix in ['.mp4', '.mkv', '.webm']:
+                if f != final_path:
+                    f.rename(final_path)
+                logger.info(f"Successfully downloaded: {final_path}")
+                return final_path
+        
+        logger.error(f"No video file found for {video_id}")
         return None
 
-    except Exception as e:
-        logger.error(f"Unexpected download error: {str(e)}", exc_info=True)
-        return None
-    finally:
-        progress.complete()
+if __name__ == "__main__":
+    # CLI Interface
+    import argparse
+    parser = argparse.ArgumentParser(description='YouTube Video Downloader')
+    parser.add_argument('video_id', help='YouTube video ID')
+    parser.add_argument('-o', '--output', help='Output directory', default='downloads')
+    args = parser.parse_args()
 
-def run_download_command(command: list, progress: ProgressUpdater, 
-                        progress_callback: Callable, start: float, 
-                        range: float) -> bool:
-    """Run a download command with real-time progress tracking"""
-    try:
-        process = subprocess.Popen(
-            command,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.STDOUT,
-            universal_newlines=True,
-            bufsize=1
-        )
-
-        for line in process.stdout:
-            line = line.strip()
-            if line:
-                # Handle progress updates
-                if "[download]" in line and "%" in line:
-                    progress.update(line)
-                    try:
-                        percent_str = line.split("%")[0].split()[-1]
-                        percent = float(percent_str)
-                        scaled = start + (percent * range / 100)
-                        if progress_callback:
-                            progress_callback(scaled)
-                    except (ValueError, IndexError) as e:
-                        logger.warning(f"Progress parse error: {str(e)}")
-                else:
-                    logger.info(f"yt-dlp: {line}")
-
-        process.wait()
-        return process.returncode == 0
-    except Exception as e:
-        logger.error(f"Command failed: {str(e)}")
-        return False
+    # Execute download
+    downloader = VideoDownloader(args.output)
+    result = downloader.download_video(args.video_id)
+    
+    # Output result
+    if result:
+        print(f"Download successful:\n{result}")
+    else:
+        print("❌ Download failed")
+        sys.exit(1)
