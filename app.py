@@ -136,4 +136,36 @@ def main():
                     completed = sum(1 for v in current_data.values() if v >= 100)
                     total = st.session_state.progress['total']
                     progress = completed / total if total > 0 else 0
-                    label = f"📥 Download\n({
+                    label = f"📥 Download\n({completed}/{total} videos)"
+                else:
+                    completed = sum(1 for v in current_data.values() if v >= 100)
+                    total = st.session_state.progress['total']
+                    progress = completed / total if total > 0 else 0
+                    label = f"📊 {step.capitalize()}\n({completed}/{total} videos)"
+                
+                st.progress(progress, text=label)
+
+        st.progress(
+            1.0 if st.session_state.progress['zip'] else 0,
+            text="📦 ZIP Packaging: " + ("Done" if st.session_state.progress['zip'] else "Pending")
+        )
+
+    if st.session_state.logs:
+        with st.expander("Processing Logs"):
+            st.code("\n".join(st.session_state.logs[-50:]))
+
+    if st.session_state.get('zip_path'):
+        st.subheader("Results")
+        zip_size = format_size(os.path.getsize(st.session_state.zip_path))
+        st.metric("Final ZIP Size", zip_size)
+        
+        with open(st.session_state.zip_path, "rb") as f:
+            st.download_button(
+                "📥 Download All Clips",
+                data=f,
+                file_name="clips_with_transcripts.zip",
+                mime="application/zip"
+            )
+
+if __name__ == "__main__":
+    main()
