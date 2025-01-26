@@ -9,6 +9,8 @@ from pathlib import Path
 from typing import List, Dict
 from bulk_processor import BulkProcessor
 
+os.system("playwright install")
+
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
