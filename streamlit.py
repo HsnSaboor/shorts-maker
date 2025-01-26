@@ -10,7 +10,7 @@ from typing import List
 import io
 from bulk_processor import BulkProcessor
 
-os.system("playwright install")
+os.system("playwright install"
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
