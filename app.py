@@ -84,7 +84,7 @@ def main():
                 if step_type not in st.session_state.progress['steps']:
                     st.session_state.progress['steps'][step_type] = {}
                 st.session_state.progress['steps'][step_type][index] = progress
-                st.experimental_rerun()
+                st.rerun()
 
             processor = BulkProcessor(
                 concurrency=concurrency,
