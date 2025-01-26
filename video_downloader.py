@@ -1,20 +1,41 @@
-# video_downloader.py
 import os
 import subprocess
 import logging
+import sys
 from pathlib import Path
 from typing import Optional, Callable
 
 logging.basicConfig(
     level=logging.INFO,
-    format='%(asctime)s - %(levelname)s - %(message)s'
+    format='%(asctime)s - %(levelname)s - %(message)s',
+    handlers=[
+        logging.FileHandler('downloads.log'),
+        logging.StreamHandler(sys.stdout)
+    ]
 )
 logger = logging.getLogger(__name__)
 
+class ProgressUpdater:
+    def __init__(self):
+        self.last_line_length = 0
+
+    def update(self, message: str):
+        """Overwrite the current line with new progress"""
+        sys.stderr.write('\r' + ' ' * self.last_line_length + '\r')  # Clear previous line
+        sys.stderr.write(message)
+        sys.stderr.flush()
+        self.last_line_length = len(message)
+
+    def complete(self):
+        """Move to new line after completion"""
+        sys.stderr.write('\n')
+        sys.stderr.flush()
+
 def download_video(video_id: str, progress_callback: Optional[Callable] = None) -> Optional[str]:
     """Download YouTube video with separate audio/video streams and merge them"""
+    progress = ProgressUpdater()
     try:
-        logger.info(f"🎬 Starting download for video: {video_id}")
+        logger.info(f"Starting download for video: {video_id}")
         output_dir = Path("temp_videos")
         output_dir.mkdir(exist_ok=True)
         base_path = output_dir / video_id
@@ -34,7 +55,7 @@ def download_video(video_id: str, progress_callback: Optional[Callable] = None) 
             '--progress',
             f'https://www.youtube.com/watch?v={video_id}'
         ]
-        if not run_download_command(video_command, progress_callback, 0, 50):
+        if not run_download_command(video_command, progress, progress_callback, 0, 50):
             return None
 
         # Download audio stream
@@ -46,11 +67,11 @@ def download_video(video_id: str, progress_callback: Optional[Callable] = None) 
             '--progress',
             f'https://www.youtube.com/watch?v={video_id}'
         ]
-        if not run_download_command(audio_command, progress_callback, 50, 50):
+        if not run_download_command(audio_command, progress, progress_callback, 50, 50):
             return None
 
         # Merge streams
-        logger.info("🔗 Merging video and audio streams")
+        logger.info("Merging video and audio streams")
         ffmpeg_command = [
             'ffmpeg',
             '-i', str(video_path),
@@ -69,7 +90,7 @@ def download_video(video_id: str, progress_callback: Optional[Callable] = None) 
         )
         
         if result.returncode != 0:
-            logger.error(f"❌ Merge failed: {result.stderr[:500]}...")
+            logger.error(f"Merge failed: {result.stderr[:500]}...")
             return None
 
         # Cleanup temporary files
@@ -78,36 +99,37 @@ def download_video(video_id: str, progress_callback: Optional[Callable] = None) 
 
         if final_path.exists():
             size_mb = final_path.stat().st_size / 1024 / 1024
-            logger.info(f"✅ Successfully downloaded {final_path} ({size_mb:.2f} MB)")
+            logger.info(f"Successfully downloaded {final_path} ({size_mb:.2f} MB)")
             return str(final_path)
             
-        logger.error("❌ Merged file not found")
+        logger.error("Merged file not found")
         return None
 
     except Exception as e:
-        logger.error(f"🔥 Unexpected download error: {str(e)}", exc_info=True)
+        logger.error(f"Unexpected download error: {str(e)}", exc_info=True)
         return None
+    finally:
+        progress.complete()
 
-def run_download_command(command: list, progress_callback: Callable, 
-                        start: float, range: float) -> bool:
-    """Run a download command with real-time logging and progress tracking"""
+def run_download_command(command: list, progress: ProgressUpdater, 
+                        progress_callback: Callable, start: float, 
+                        range: float) -> bool:
+    """Run a download command with real-time progress tracking"""
     try:
         process = subprocess.Popen(
             command,
             stdout=subprocess.PIPE,
             stderr=subprocess.STDOUT,
             universal_newlines=True,
-            bufsize=1  # Line buffered output
+            bufsize=1
         )
 
         for line in process.stdout:
             line = line.strip()
             if line:
-                # Log the raw output line
-                logger.info(f"yt-dlp: {line}")
-                
                 # Handle progress updates
                 if "[download]" in line and "%" in line:
+                    progress.update(line)
                     try:
                         percent_str = line.split("%")[0].split()[-1]
                         percent = float(percent_str)
@@ -115,10 +137,12 @@ def run_download_command(command: list, progress_callback: Callable,
                         if progress_callback:
                             progress_callback(scaled)
                     except (ValueError, IndexError) as e:
-                        logger.warning(f"⚠️ Progress parse error: {str(e)}")
+                        logger.warning(f"Progress parse error: {str(e)}")
+                else:
+                    logger.info(f"yt-dlp: {line}")
 
         process.wait()
         return process.returncode == 0
     except Exception as e:
-        logger.error(f"❌ Command failed: {str(e)}")
+        logger.error(f"Command failed: {str(e)}")
         return False
