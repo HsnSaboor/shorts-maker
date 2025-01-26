@@ -97,4 +97,55 @@ def main():
 
             async def update_progress(step_type: str, index: int, progress: float):
                 if step_type not in st.session_state.progress['steps']:
-                    st.session_state.pro
+                    st.session_state.progress['steps'][step_type] = {}
+                st.session_state.progress['steps'][step_type][index] = progress
+                st.experimental_rerun()
+
+            asyncio.run(process())
+
+        except Exception as e:
+            logger.error(f"Processing failed: {str(e)}")
+            st.error(f"Processing failed: {str(e)}")
+        finally:
+            logging.getLogger().removeHandler(log_handler)
+            st.session_state.processing = False
+
+    if st.session_state.progress['total'] > 0:
+        st.subheader("Processing Progress")
+        
+        steps = ['download', 'transcript', 'heatmap', 'clips']
+        cols = st.columns(len(steps))
+        for idx, step in enumerate(steps):
+            with cols[idx]:
+                current = sum(1 for v in st.session_state.progress['steps'].get(step, {}).values() if v >= 100)
+                total = st.session_state.progress['total']
+                progress = current / total if total > 0 else 0
+                st.progress(
+                    progress,
+                    text=f"📊 {step.capitalize()}\n({current}/{total} videos)"
+                )
+
+        st.progress(
+            1.0 if st.session_state.progress['zip'] else 0,
+            text="📦 ZIP Packaging: " + ("Done" if st.session_state.progress['zip'] else "Pending")
+        )
+
+    if st.session_state.logs:
+        with st.expander("Processing Logs"):
+            st.code("\n".join(st.session_state.logs[-50:]))
+
+    if st.session_state.get('zip_path'):
+        st.subheader("Results")
+        zip_size = format_size(os.path.getsize(st.session_state.zip_path))
+        st.metric("Final ZIP Size", zip_size)
+        
+        with open(st.session_state.zip_path, "rb") as f:
+            st.download_button(
+                "📥 Download All Clips",
+                data=f,
+                file_name="clips_with_transcripts.zip",
+                mime="application/zip"
+            )
+
+if __name__ == "__main__":
+    main()
