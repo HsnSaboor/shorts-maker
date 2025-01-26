@@ -11,6 +11,8 @@ import base64
 import os
 from bulk_processor import BulkProcessor
 
+os.system("playwright install")
+
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -180,7 +182,7 @@ async def main_processing_flow():
 
 if __name__ == "__main__":
     # Install Playwright dependencies
-    os.system("playwright install")
+    
     
     # Run the async app
     asyncio.run(main_processing_flow())
