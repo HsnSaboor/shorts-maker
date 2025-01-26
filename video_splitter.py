@@ -10,7 +10,11 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# video_splitter.py - Add explicit path conversion
 def cut_video_into_clips(video_path: str, clips: List[Dict], output_dir: str) -> Optional[List[str]]:
+    video_path = str(Path(video_path).resolve())  # Convert to absolute path
+    output_dir = Path(output_dir)
+    # ... rest of the function ...
     """Split video into clips with detailed progress tracking"""
     try:
         logger.info("✂️ Starting video clipping process")
