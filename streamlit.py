@@ -4,7 +4,6 @@ import json
 import logging
 import zipfile
 import os
-import humanize
 from pathlib import Path
 from typing import List, Dict, Optional
 from bulk_processor import BulkProcessor
@@ -42,7 +41,7 @@ def create_zip(output_dir: str) -> str:
                     logger.info(f"Added to ZIP: {relative_path}")
     
     zip_size = os.path.getsize(zip_path)
-    logger.info(f"ZIP creation complete. Size: {humanize.naturalsize(zip_size)}")
+    logger.info(f"ZIP creation complete. Size: {zip_size}")
     return zip_path
 
 def format_size(size_bytes: int) -> str:
