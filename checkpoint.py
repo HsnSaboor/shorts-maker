@@ -15,6 +15,8 @@ def get_video_id(video_url):
     """Extract video ID from URL"""
     if 'v=' in video_url:
         return video_url.split('v=')[1].split('&')[0]
+    elif 'youtu.be/' in video_url:
+        return video_url.split('youtu.be/')[1].split('?')[0]
     return video_url
 
 def get_checkpoint_path(video_url, stage):

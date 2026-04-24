@@ -19,11 +19,21 @@ def create_audio_chunks(audio_path, chunk_duration=3600, overlap=300):
         current_ms += (chunk_duration - overlap) * 1000
     return chunks
 
-def download_video(video_id, skip_if_exists=False):
+def download_video(video_id, skip_if_exists=False, cookies_file=None):
     out = f"{TEMP_DIR}/{video_id}.mp4"
     if skip_if_exists and os.path.exists(out): return out
-    opts = {'format': 'bestvideo[height<=1080][vcodec^=avc1]+bestaudio[ext=m4a]/best[ext=mp4]',
-            'outtmpl': out, 'merge_output_format': 'mp4', 'quiet': True}
+    
+    opts = {
+        'format': 'bestvideo[height<=1080][vcodec^=avc1]+bestaudio[ext=m4a]/best[ext=mp4]/best',
+        'outtmpl': out, 
+        'merge_output_format': 'mp4', 
+        'quiet': True,
+        'verbose': False,
+        'remote_components': 'ejs:npm',
+    }
+    if cookies_file and os.path.exists(cookies_file):
+        opts['cookiefile'] = cookies_file
+    
     with YoutubeDL(opts) as ydl:
         ydl.download([f"https://www.youtube.com/watch?v={video_id}"])
     return out

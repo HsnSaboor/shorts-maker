@@ -232,7 +232,7 @@ def mine_phase1(video_url, rule_profile, rerun=False, limit=None):
     return candidates, transcript, campaign_config, full_video_words
 
 
-def process_candidate(video_url, rule_profile, candidate, full_video_words=None, video_output_dir=None, rerun=False, transcript=None):
+def process_candidate(video_url, rule_profile, candidate, full_video_words=None, video_output_dir=None, rerun=False, transcript=None, cookies_file=None):
     """Process a single candidate through phases 2-6"""
     video_id = extract_video_id(video_url)
     
@@ -285,7 +285,10 @@ def process_candidate(video_url, rule_profile, candidate, full_video_words=None,
             video_path = local_video
             print(f"✓ Using existing video: {video_path}")
         else:
-            video_path = f"temp/{video_id}.mp4"
+            from phase3_extraction import download_video
+            print(f"📥 Downloading video...")
+            video_path = download_video(video_id, cookies_file=cookies_file)
+            print(f"✓ Downloaded: {video_path}")
 
         source_segments = resolve_candidate_segments(candidate, transcript)
         if not source_segments:
@@ -447,7 +450,7 @@ def process_candidate(video_url, rule_profile, candidate, full_video_words=None,
     }
 
 
-def run_full_pipeline(video_url, rule_profile, rerun=False, clean=False, limit=None):
+def run_full_pipeline(video_url, rule_profile, rerun=False, clean=False, limit=None, cookies_file=None):
     """Execute the full pipeline"""
     import pandas as pd
     from datetime import datetime
@@ -476,7 +479,12 @@ def run_full_pipeline(video_url, rule_profile, rerun=False, clean=False, limit=N
         clear_checkpoints(video_url)
     
     # Get video title
-    with YoutubeDL({'quiet': True}) as ydl:
+    ydl_opts = {'quiet': True}
+    if cookies_file and os.path.exists(cookies_file):
+        ydl_opts['cookiefile'] = cookies_file
+        print(f"Using cookies from: {cookies_file}")
+    
+    with YoutubeDL(ydl_opts) as ydl:
         info = ydl.extract_info(video_url, download=False)
         video_title = re.sub(r'[^\w\s-]', '', info['title']).strip().replace(' ', '-').lower()[:50]
     
@@ -514,6 +522,7 @@ def run_full_pipeline(video_url, rule_profile, rerun=False, clean=False, limit=N
             video_output_dir=video_output_dir,
             rerun=rerun,
             transcript=transcript,
+            cookies_file=cookies_file,
         )
 
     with ThreadPoolExecutor(max_workers=worker_count) as executor:
@@ -559,9 +568,9 @@ def run_full_pipeline(video_url, rule_profile, rerun=False, clean=False, limit=N
     
     if os.path.exists(csv_path):
         existing = pd.read_csv(csv_path)
-        df = pd.concat([existing, new_rows], ignore_index=True)
+        df = pd.concat([existing, pd.DataFrame(new_rows)], ignore_index=True)
     else:
-        df = new_rows
+        df = pd.DataFrame(new_rows)
     df.to_csv(csv_path, index=False)
     
     print("=" * 60)
@@ -592,6 +601,7 @@ if __name__ == "__main__":
     parser.add_argument('--rerun', action='store_true', help='Skip video download, reprocess from existing temp file')
     parser.add_argument('--clean', action='store_true', help='Clear checkpoints and output for this video before processing')
     parser.add_argument('-l', '--limit', type=int, help='Limit number of final clips to render', default=None)
+    parser.add_argument('--cookies', dest='cookies_file', help='YouTube cookies file (Netscape format)', default=None)
     
     args = parser.parse_args()
     
@@ -606,7 +616,7 @@ if __name__ == "__main__":
             sys.exit(1)
     
     try:
-        run_full_pipeline(args.video_url, args.rule_profile, args.rerun, args.clean, args.limit)
+        run_full_pipeline(args.video_url, args.rule_profile, args.rerun, args.clean, args.limit, args.cookies_file)
     except Exception as e:
         import traceback
         print(f"❌ Pipeline failed: {e}")
