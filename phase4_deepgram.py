@@ -28,6 +28,8 @@ def transcribe_with_deepgram(audio_path: str, chunk_info: dict = None) -> dict:
     with open(audio_path, 'rb') as f:
         audio_data = f.read()
     
+    file_size_mb = len(audio_data) / (1024 * 1024)
+    
     params = {
         'model': 'nova-3',
         'smart_format': 'true',
@@ -41,6 +43,12 @@ def transcribe_with_deepgram(audio_path: str, chunk_info: dict = None) -> dict:
         'Content-Type': 'audio/mpeg'
     }
     
+    # Use longer timeout for larger files (Deepgram recommends 300s for large files)
+    # Also increase connect timeout to give server time to accept the upload
+    base_timeout = 300.0
+    if file_size_mb > 50:
+        base_timeout = 600.0  # 10 minutes for very large files
+    
     last_exception = None
     response = None
     
@@ -49,27 +57,41 @@ def transcribe_with_deepgram(audio_path: str, chunk_info: dict = None) -> dict:
         
         for retry in range(3):
             try:
+                # Use httpx.Timeout to separately configure connect and read timeouts
+                # connect: time to establish connection (important for large uploads)
+                # read: time to wait for response after upload
+                # write: time to send data
+                # pool: time to wait for connection from pool
+                timeout = httpx.Timeout(
+                    connect=60.0,  # Give server time to accept large uploads
+                    read=base_timeout,
+                    write=120.0,
+                    pool=60.0
+                )
+                
                 response = httpx.post(
                     url,
                     params=params,
                     headers=headers,
                     content=audio_data,
-                    timeout=300.0
+                    timeout=timeout
                 )
                 
                 if response.status_code == 408:
                     if retry < 2:
-                        print(f"  Timeout on key {key_idx}, retry {retry+1}/3...")
-                        time.sleep(2)
+                        wait_time = 2 ** retry  # Exponential backoff: 1s, 2s, 4s
+                        print(f"  Timeout on key {key_idx}, retry {retry+1}/3 (wait {wait_time}s)...")
+                        time.sleep(wait_time)
                         continue
                     print(f"  Timeout on key {key_idx} after 3 retries, trying next...")
                     response = None
                     break
                 
                 if response.status_code == 429:
-                    print(f"  Rate limited on key {key_idx}, trying next...")
-                    response = None
-                    break
+                    wait_time = 2 ** retry
+                    print(f"  Rate limited on key {key_idx}, retry {retry+1}/3 (wait {wait_time}s)...")
+                    time.sleep(wait_time)
+                    continue
                 if response.status_code == 401:
                     print(f"  Invalid key {key_idx}, trying next...")
                     response = None
@@ -78,9 +100,38 @@ def transcribe_with_deepgram(audio_path: str, chunk_info: dict = None) -> dict:
                 response.raise_for_status()
                 break
                 
+            except httpx.WriteTimeout as e:
+                last_exception = e
+                response = None
+                wait_time = 2 ** retry
+                if retry < 2:
+                    print(f"  WriteTimeout on key {key_idx}, retry {retry+1}/3 (wait {wait_time}s)...")
+                    time.sleep(wait_time)
+                    continue
+                if key_idx < len(DEEPGRAM_API_KEYS) - 1:
+                    print(f"  WriteTimeout on key {key_idx} after 3 retries, trying next...")
+                    break
+                raise
+            except httpx.ReadTimeout as e:
+                last_exception = e
+                response = None
+                wait_time = 2 ** retry
+                if retry < 2:
+                    print(f"  ReadTimeout on key {key_idx}, retry {retry+1}/3 (wait {wait_time}s)...")
+                    time.sleep(wait_time)
+                    continue
+                if key_idx < len(DEEPGRAM_API_KEYS) - 1:
+                    print(f"  ReadTimeout on key {key_idx} after 3 retries, trying next...")
+                    break
+                raise
             except Exception as e:
                 last_exception = e
                 response = None
+                wait_time = 2 ** retry
+                if retry < 2:
+                    print(f"  Error on key {key_idx}, retry {retry+1}/3 (wait {wait_time}s): {e}")
+                    time.sleep(wait_time)
+                    continue
                 if key_idx < len(DEEPGRAM_API_KEYS) - 1:
                     print(f"  Error on key {key_idx}: {e}, trying next...")
                     break

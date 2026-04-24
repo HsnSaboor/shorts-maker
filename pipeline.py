@@ -383,17 +383,16 @@ def process_candidate(video_url, rule_profile, candidate, full_video_words=None,
     else:
         print(f"🎨 Rendering final 16:9 video...")
         with RENDER_LOCK:
-            unique_suffix = candidate.get('_seq', 0)
             output_path = render_final_video(
                 video_path,
                 words,
                 edit_result,
-                cid,
+                cid,  # Now globally unique (1-18)
                 video_id,
                 viral_title,
                 video_output_dir,
                 source_segments=source_segments,
-                unique_suffix=unique_suffix,
+                unique_suffix=0,
             )
         
         import json
@@ -512,6 +511,7 @@ def run_full_pipeline(video_url, rule_profile, rerun=False, clean=False, limit=N
 
     for idx, candidate in enumerate(candidates, 1):
         candidate['_seq'] = idx
+        candidate['candidate_id'] = idx  # Make globally unique (was resetting per chunk)
 
     def _run_candidate(candidate):
         return process_candidate(
