@@ -21,6 +21,38 @@ from checkpoint import save_checkpoint, load_checkpoint, checkpoint_exists
 RENDER_LOCK = Lock()
 
 
+def format_timestamp(seconds):
+    hours = int(seconds // 3600)
+    minutes = int((seconds % 3600) // 60)
+    secs = int(seconds % 60)
+    millis = int((seconds % 1) * 1000)
+    return f"{hours:02d}:{minutes:02d}:{secs:02d},{millis:03d}"
+
+
+def words_to_srt(words):
+    srt_lines = []
+    subtitle_idx = 1
+    i = 0
+    while i < len(words):
+        w = words[i]
+        start = w['start']
+        text_parts = []
+        j = i
+        while j < len(words) and words[j]['start'] - words[i]['start'] < 2.5:
+            text_parts.append(words[j]['word'])
+            j += 1
+        end = words[j - 1]['end'] if j > i else w['end']
+        text = ' '.join(text_parts).strip()
+        if text:
+            srt_lines.append(f"{subtitle_idx}")
+            srt_lines.append(f"{format_timestamp(start)} --> {format_timestamp(end)}")
+            srt_lines.append(text)
+            srt_lines.append("")
+            subtitle_idx += 1
+        i = j
+    return '\n'.join(srt_lines)
+
+
 def extract_video_id(url_or_id):
     if 'youtube.com' in url_or_id or 'youtu.be' in url_or_id:
         if 'v=' in url_or_id:
@@ -309,6 +341,10 @@ def process_candidate(video_url, rule_profile, candidate, full_video_words=None,
         words_path = output_path.replace('.mp4', '_words.json')
         with open(words_path, 'w') as f:
             json.dump({'words': words}, f, indent=2)
+        
+        srt_path = output_path.replace('.mp4', '.srt')
+        with open(srt_path, 'w') as f:
+            f.write(words_to_srt(words))
         
         save_checkpoint(video_url, f'phase5_c{cid}', {
             'output_path': output_path,
