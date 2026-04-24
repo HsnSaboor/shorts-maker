@@ -277,6 +277,7 @@ def process_candidate(video_url, rule_profile, candidate, full_video_words=None,
     else:
         print(f"🎨 Rendering final 16:9 video...")
         with RENDER_LOCK:
+            unique_suffix = candidate.get('_seq', 0)
             output_path = render_final_video(
                 video_path,
                 words,
@@ -286,6 +287,7 @@ def process_candidate(video_url, rule_profile, candidate, full_video_words=None,
                 viral_title,
                 video_output_dir,
                 source_segments=source_segments,
+                unique_suffix=unique_suffix,
             )
         
         import json
@@ -390,6 +392,9 @@ def run_full_pipeline(video_url, rule_profile, rerun=False, clean=False, limit=N
     if worker_count > 1:
         print(f"⚙️  Parallel candidate processing enabled (workers={worker_count})")
 
+    for idx, candidate in enumerate(candidates, 1):
+        candidate['_seq'] = idx
+
     def _run_candidate(candidate):
         return process_candidate(
             video_url,
@@ -421,12 +426,11 @@ def run_full_pipeline(video_url, rule_profile, rerun=False, clean=False, limit=N
                     'traceback': traceback_str,
                 })
 
-    successful = [r for r in results]
     results.sort(key=lambda x: x['candidate_id'])
     
     # Append to global CSV
     csv_path = os.path.join(OUTPUT_DIR, "all_clips.csv")
-    new_rows = pd.DataFrame([{
+    new_rows = [{
         'timestamp': datetime.now().isoformat(),
         'video_id': video_id,
         'video_url': video_url,
@@ -441,7 +445,7 @@ def run_full_pipeline(video_url, rule_profile, rerun=False, clean=False, limit=N
         'hook_score': r['virality'].get('hook_score', 0),
         'engagement_score': r['virality'].get('engagement_score', 0),
         'shareability_score': r['virality'].get('shareability_score', 0)
-    } for r in results])
+    } for r in results]
     
     if os.path.exists(csv_path):
         existing = pd.read_csv(csv_path)
@@ -453,7 +457,7 @@ def run_full_pipeline(video_url, rule_profile, rerun=False, clean=False, limit=N
     print("=" * 60)
     print("Pipeline Complete!")
     print("=" * 60)
-    print(f"Exported {len(successful)} clips to: {csv_path}")
+    print(f"Exported {len(new_rows)} clips to: {csv_path}")
     for r in results:
         print(f"  {os.path.basename(r['output'])}: {r['viral_title'][:60]}...")
     

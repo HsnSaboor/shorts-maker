@@ -169,6 +169,7 @@ def render_final_video(
     video_output_dir=None,
     use_vaapi=True,
     source_segments=None,
+    unique_suffix=0,
 ):
     output_base = video_output_dir or OUTPUT_DIR
     os.makedirs(output_base, exist_ok=True)
@@ -185,7 +186,8 @@ def render_final_video(
         raise ValueError("No source-mapped keep segments generated from edit output")
 
     clean_title = re.sub(r"[^\w\s-]", "", viral_title or "clip").strip().replace(" ", "-").lower()[:40]
-    output_filename = f"cid{candidate_id}_{clean_title}.mp4"
+    suffix = f"-{unique_suffix}" if unique_suffix > 0 else ""
+    output_filename = f"cid{candidate_id}{suffix}_{clean_title}.mp4"
     out = f"{output_base}/{output_filename}"
 
     decode_is_hw = use_vaapi
