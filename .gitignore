@@ -1,0 +1,32 @@
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+.pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Virtual environments and secrets
+.venv/
+venv/
+.env
+.env.backup
+
+# Local/generated artifacts
+temp/
+output/
+output_backup/
+*.log
+test_verified.mp4
+
+# Local docs/research
+.devdocs/
+
+# Nested tool dependencies
+tubetranscript-proxy/node_modules/
+
+# IDE/OS
+.idea/
+.vscode/
+.DS_Store

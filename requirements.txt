@@ -1,0 +1,8 @@
+httpx
+pandas
+youtube-transcript-api
+yt-dlp
+opencv-python
+deepgram-sdk
+pydub
+rich

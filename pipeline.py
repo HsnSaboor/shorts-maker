@@ -1,0 +1,430 @@
+#!/usr/bin/env python3
+"""
+Hybrid AI-Automated Viral Clipping Pipeline
+REST + FFmpeg Edition for Arch Linux
+"""
+import sys
+import os
+import subprocess
+from concurrent.futures import ThreadPoolExecutor
+from phase1_miner import mine_candidates
+from phase2_editor import identify_fillers
+from phase3_extraction import download_video, extract_segments, create_audio_chunks
+from phase4_deepgram import transcribe_with_deepgram, merge_chunked_transcriptions
+from phase5_render import render_final_video
+from config import TEMP_DIR, OUTPUT_DIR
+from checkpoint import save_checkpoint, load_checkpoint, checkpoint_exists
+
+
+def extract_video_id(url_or_id):
+    if 'youtube.com' in url_or_id or 'youtu.be' in url_or_id:
+        if 'v=' in url_or_id:
+            return url_or_id.split('v=')[1].split('&')[0]
+        elif 'youtu.be/' in url_or_id:
+            return url_or_id.split('youtu.be/')[1].split('?')[0]
+    return url_or_id
+
+
+def mine_phase1(video_url, rule_profile, rerun=False, limit=None):
+    """Execute Phase 1: Candidate mining only"""
+    checkpoint_data = load_checkpoint(video_url, 'phase1')
+    if checkpoint_data:
+        checkpoint_limit = checkpoint_data.get('candidate_limit')
+        can_use_checkpoint = True
+
+        if limit is None and checkpoint_limit is not None:
+            can_use_checkpoint = False
+        elif limit is not None and checkpoint_limit is not None and checkpoint_limit < limit:
+            can_use_checkpoint = False
+
+        if can_use_checkpoint:
+            print(f"⚡ Resuming from Phase 1 checkpoint")
+            candidates = checkpoint_data['candidates']
+            if limit is not None:
+                candidates = candidates[:limit]
+            return candidates, checkpoint_data['transcript'], checkpoint_data['campaign_config'], checkpoint_data.get('full_video_words')
+
+        print("🔄 Existing Phase 1 checkpoint is incompatible with requested limit, regenerating...")
+    
+    print(f"⛏️  Mining candidates from: {video_url}")
+    if rule_profile:
+        print(f"📋 Rules profile: {rule_profile}")
+    
+    video_id = extract_video_id(video_url)
+    full_video_words = None
+    
+    transcript = None
+    try:
+        from phase1_miner import fetch_transcript
+        transcript = fetch_transcript(video_id)
+    except:
+        pass
+    
+    if transcript is None:
+        print("📡 YouTube transcript unavailable, using Deepgram for full video")
+        from phase3_extraction import download_video, create_audio_chunks
+        from phase4_deepgram import transcribe_with_deepgram, merge_chunked_transcriptions
+        from concurrent.futures import ThreadPoolExecutor
+        import subprocess
+        
+        video_path = f"temp/{video_id}.mp4"
+        audio_path = video_path.replace('.mp4', '_full.mp3')
+        
+        subprocess.run([
+            'ffmpeg', '-i', video_path, '-vn', '-acodec', 'libmp3lame',
+            '-q:a', '2', audio_path, '-y'
+        ], check=True, capture_output=True)
+        
+        result = subprocess.run(
+            ['ffprobe', '-v', 'error', '-show_entries', 'format=duration',
+             '-of', 'default=noprint_wrappers=1:nokey=1', audio_path],
+            capture_output=True, text=True, timeout=30
+        )
+        audio_duration = float(result.stdout.strip()) if result.stdout.strip() else 0
+        
+        if audio_duration > 3600:
+            print(f"🎙️  Long audio ({audio_duration/60:.0f} min), chunking for transcription...")
+            chunks = create_audio_chunks(audio_path)
+            
+            def transcribe_chunk(args):
+                idx, chunk = args
+                return idx, transcribe_with_deepgram(chunk['path'], chunk_info={'start_offset': chunk['start_offset']})
+            
+            with ThreadPoolExecutor(max_workers=min(len(chunks), 10)) as executor:
+                futures = list(executor.map(transcribe_chunk, enumerate(chunks)))
+            
+            chunk_results = [None] * len(chunks)
+            for idx, result in futures:
+                chunk_results[idx] = result
+            
+            deepgram_result = merge_chunked_transcriptions([r for r in chunk_results if r])
+        else:
+            deepgram_result = transcribe_with_deepgram(audio_path)
+        
+        full_video_words = deepgram_result['words']
+        print(f"✓ Transcribed {len(full_video_words)} words via Deepgram")
+    
+    candidates, transcript, campaign_config = mine_candidates(
+        video_id,
+        rule_profile,
+        full_video_words=full_video_words,
+        max_candidates=limit,
+        transcript=transcript,
+    )
+    
+    save_checkpoint(video_url, 'phase1', {
+        'candidates': candidates,
+        'transcript': transcript,
+        'campaign_config': campaign_config,
+        'full_video_words': full_video_words,
+        'candidate_limit': limit,
+    })
+    
+    print(f"✓ Found {len(candidates)} candidates")
+    return candidates, transcript, campaign_config, full_video_words
+
+
+def process_candidate(video_url, rule_profile, candidate, full_video_words=None, video_output_dir=None, rerun=False, transcript=None):
+    """Process a single candidate through phases 2-6"""
+    video_id = extract_video_id(video_url)
+    
+    cid = candidate['candidate_id']
+    virality = candidate.get('virality', {})
+    viral_title = candidate.get('viral_title', 'Untitled')
+    
+    print(f"📹 Processing Candidate {cid}: {candidate['hook_summary']}")
+    print(f"   Duration: {candidate['duration']:.1f}s | Virality: {virality.get('total_score', 0)}/100")
+    
+    phase1_data = None
+    if transcript is None:
+        phase1_data = load_checkpoint(video_url, 'phase1')
+        if not phase1_data:
+            _, transcript, _, mined_full_video_words = mine_phase1(video_url, rule_profile)
+            if full_video_words is None:
+                full_video_words = mined_full_video_words
+        else:
+            transcript = phase1_data['transcript']
+            if full_video_words is None:
+                full_video_words = phase1_data.get('full_video_words')
+    elif full_video_words is None:
+        phase1_data = load_checkpoint(video_url, 'phase1')
+        if phase1_data:
+            full_video_words = phase1_data.get('full_video_words')
+    
+    phase2_checkpoint = load_checkpoint(video_url, f'phase2_c{cid}')
+    if phase2_checkpoint:
+        print(f"⚡ Resuming from Phase 2 checkpoint")
+        video_path = phase2_checkpoint['video_path']
+        rough_cut = phase2_checkpoint['rough_cut']
+        audio_path = phase2_checkpoint['audio_path']
+    else:
+        print(f"📥 Downloading and extracting segments...")
+        local_video = f"{TEMP_DIR}/{video_id}.mp4"
+        if os.path.exists(local_video):
+            video_path = local_video
+            print(f"✓ Using existing video: {video_path}")
+        else:
+            video_path = f"temp/{video_id}.mp4"
+        rough_cut, audio_path = extract_segments(video_path, candidate, transcript, cid)
+        save_checkpoint(video_url, f'phase2_c{cid}', {
+            'video_path': video_path,
+            'rough_cut': rough_cut,
+            'audio_path': audio_path
+        })
+        print(f"✓ Rough cut created")
+    
+    phase3_checkpoint = load_checkpoint(video_url, f'phase3_c{cid}')
+    if phase3_checkpoint:
+        print(f"⚡ Resuming from Phase 3 checkpoint")
+        words = phase3_checkpoint['words']
+        print(f"✓ Loaded {len(words)} transcribed words")
+    else:
+        if full_video_words:
+            print(f"✂️  Extracting clip words from full video transcript...")
+            from utils.transcript_utils import extract_clip_words
+            words = extract_clip_words(full_video_words, candidate, transcript)
+            print(f"✓ Extracted {len(words)} words from full transcript")
+        else:
+            audio_duration = 0
+            try:
+                result = subprocess.run(
+                    ['ffprobe', '-v', 'error', '-show_entries', 'format=duration',
+                     '-of', 'default=noprint_wrappers=1:nokey=1', audio_path],
+                    capture_output=True, text=True, timeout=30
+                )
+                audio_duration = float(result.stdout.strip()) if result.stdout.strip() else 0
+            except Exception as e:
+                print(f"Warning: Could not determine audio duration: {e}")
+            
+            LONG_AUDIO_THRESHOLD = 60 * 60
+            
+            if audio_duration > LONG_AUDIO_THRESHOLD:
+                print(f"🎙️  Long audio ({audio_duration/60:.0f} min), CONCURRENT transcription...")
+                chunks = create_audio_chunks(audio_path)
+                
+                def transcribe_chunk(args):
+                    idx, chunk = args
+                    return idx, transcribe_with_deepgram(
+                        chunk['path'],
+                        chunk_info={'start_offset': chunk['start_offset']}
+                    )
+                
+                with ThreadPoolExecutor(max_workers=min(len(chunks), 10)) as executor:
+                    futures = list(executor.map(transcribe_chunk, enumerate(chunks)))
+                
+                chunk_results = [None] * len(chunks)
+                for idx, result in futures:
+                    chunk_results[idx] = result
+                
+                chunk_results = [r for r in chunk_results if r is not None]
+                deepgram_result = merge_chunked_transcriptions(chunk_results)
+                print(f"  ✓ Merged {len(deepgram_result['words'])} words from {len(chunks)} chunks")
+            else:
+                print(f"🎙️  Deepgram transcription...")
+                deepgram_result = transcribe_with_deepgram(audio_path)
+                print(f"✓ Transcribed {len(deepgram_result['words'])} words")
+            
+            words = deepgram_result['words']
+        
+        save_checkpoint(video_url, f'phase3_c{cid}', {'words': words})
+    
+    phase4_checkpoint = load_checkpoint(video_url, f'phase4_c{cid}')
+    if phase4_checkpoint:
+        print(f"⚡ Resuming from Phase 4 checkpoint")
+        edit_result = phase4_checkpoint
+        if 'word_indices_to_remove' not in edit_result:
+            edit_result = {
+                'word_indices_to_remove': phase4_checkpoint.get('filler_indices', []),
+                'trim_start_index': 0,
+                'trim_end_index': len(words)
+            }
+        print(f"✓ Loaded {len(edit_result['word_indices_to_remove'])} words for removal")
+    else:
+        print(f"✂️  Identifying filler words...")
+        edit_result = identify_fillers(words, cid, rule_profile)
+        save_checkpoint(video_url, f'phase4_c{cid}', edit_result)
+        print(f"✓ Targeting {len(edit_result['word_indices_to_remove'])} words for removal, trim: [{edit_result['trim_start_index']}:{edit_result['trim_end_index']}]")
+    
+    phase5_checkpoint = load_checkpoint(video_url, f'phase5_c{cid}')
+    if phase5_checkpoint:
+        print(f"⚡ Resuming from Phase 5 checkpoint")
+        output_path = phase5_checkpoint['output_path']
+        print(f"✓ Loaded rendered video: {output_path}")
+    else:
+        print(f"🎨 Rendering final 16:9 video...")
+        output_path = render_final_video(rough_cut, words, edit_result, cid, video_id, viral_title, video_output_dir)
+        
+        import json
+        metadata = {
+            'candidate_id': cid,
+            'hook': candidate['hook_summary'],
+            'duration': candidate['duration'],
+            'virality': virality,
+            'viral_title': viral_title,
+            'words': words,
+            'filler_indices': edit_result['word_indices_to_remove'],
+            'trim_start_index': edit_result['trim_start_index'],
+            'trim_end_index': edit_result['trim_end_index']
+        }
+        metadata_path = output_path.replace('.mp4', '_metadata.json')
+        with open(metadata_path, 'w') as f:
+            json.dump(metadata, f, indent=2)
+        
+        words_path = output_path.replace('.mp4', '_words.json')
+        with open(words_path, 'w') as f:
+            json.dump({'words': words}, f, indent=2)
+        
+        save_checkpoint(video_url, f'phase5_c{cid}', {
+            'output_path': output_path,
+            'metadata_path': metadata_path
+        })
+        
+        print(f"✓ Rendered: {output_path}")
+        print(f"✓ Exported metadata: {metadata_path}")
+    
+    clip_transcript = ' '.join([
+        transcript[seg]['text'] if isinstance(seg, int) 
+        else seg.get('text', '') if isinstance(seg, dict)
+        else ''
+        for seg in candidate['segments']
+    ])
+    
+    return {
+        'candidate_id': cid,
+        'hook': candidate['hook_summary'],
+        'duration': candidate['duration'],
+        'virality_score': virality.get('total_score', 0),
+        'virality': virality,
+        'viral_title': viral_title,
+        'transcript': clip_transcript,
+        'output': output_path
+    }
+
+
+def run_full_pipeline(video_url, rule_profile, rerun=False, clean=False, limit=None):
+    """Execute the full pipeline"""
+    import pandas as pd
+    from datetime import datetime
+    from yt_dlp import YoutubeDL
+    import re
+    import shutil
+    
+    video_id = extract_video_id(video_url)
+    
+    if clean:
+        print("🧹 Clean mode: reprocessing from scratch + clearing output...")
+        from checkpoint import clear_checkpoints
+        clear_checkpoints(video_url)
+        
+        # Clear output directory for this video
+        with YoutubeDL({'quiet': True}) as ydl:
+            info = ydl.extract_info(video_url, download=False)
+            video_title = re.sub(r'[^\w\s-]', '', info['title']).strip().replace(' ', '-').lower()[:50]
+        video_output_dir = os.path.join(OUTPUT_DIR, video_title)
+        if os.path.exists(video_output_dir):
+            shutil.rmtree(video_output_dir)
+            print(f"   Removed output directory: {video_output_dir}")
+    elif rerun:
+        print("🔄 Rerun mode: reprocessing from scratch, keeping video/transcript...")
+        from checkpoint import clear_checkpoints
+        clear_checkpoints(video_url)
+    
+    # Get video title
+    with YoutubeDL({'quiet': True}) as ydl:
+        info = ydl.extract_info(video_url, download=False)
+        video_title = re.sub(r'[^\w\s-]', '', info['title']).strip().replace(' ', '-').lower()[:50]
+    
+    # Create output directory for this video
+    video_output_dir = os.path.join(OUTPUT_DIR, video_title)
+    os.makedirs(video_output_dir, exist_ok=True)
+    
+    candidates, transcript, campaign_config, full_video_words = mine_phase1(
+        video_url,
+        rule_profile,
+        rerun,
+        limit=limit,
+    )
+    
+    # Apply limit if specified
+    if limit:
+        candidates = candidates[:limit]
+        print(f"📌 Limit: processing only {limit} candidate(s)")
+    
+    results = []
+    for candidate in candidates:
+        result = process_candidate(
+            video_url,
+            rule_profile,
+            candidate,
+            full_video_words=full_video_words,
+            video_output_dir=video_output_dir,
+            rerun=rerun,
+            transcript=transcript,
+        )
+        results.append(result)
+    
+    # Append to global CSV
+    csv_path = os.path.join(OUTPUT_DIR, "all_clips.csv")
+    new_rows = pd.DataFrame([{
+        'timestamp': datetime.now().isoformat(),
+        'video_id': video_id,
+        'video_url': video_url,
+        'clip_id': r['candidate_id'],
+        'clip_file': r['output'],
+        'viral_title': r['viral_title'],
+        'hook': r['hook'],
+        'duration_seconds': r['duration'],
+        'virality_score': r['virality_score'],
+        'clip_quality_score': r['virality'].get('clip_quality_score', 0),
+        'value_score': r['virality'].get('value_score', 0),
+        'hook_score': r['virality'].get('hook_score', 0),
+        'engagement_score': r['virality'].get('engagement_score', 0),
+        'shareability_score': r['virality'].get('shareability_score', 0)
+    } for r in results])
+    
+    if os.path.exists(csv_path):
+        existing = pd.read_csv(csv_path)
+        df = pd.concat([existing, new_rows], ignore_index=True)
+    else:
+        df = new_rows
+    df.to_csv(csv_path, index=False)
+    
+    print("=" * 60)
+    print("Pipeline Complete!")
+    print("=" * 60)
+    print(f"Exported {len(results)} clips to: {csv_path}")
+    for r in results:
+        print(f"  {os.path.basename(r['output'])}: {r['viral_title'][:60]}...")
+    
+    return results
+
+
+if __name__ == "__main__":
+    import argparse
+    
+    parser = argparse.ArgumentParser(description='AI Shorts Generator Pipeline')
+    parser.add_argument('video_url', help='YouTube video URL')
+    parser.add_argument('--rules', dest='rule_profile', help='Rules profile name (e.g., abulayha)', default=None)
+    parser.add_argument('--rerun', action='store_true', help='Skip video download, reprocess from existing temp file')
+    parser.add_argument('--clean', action='store_true', help='Clear checkpoints and output for this video before processing')
+    parser.add_argument('-l', '--limit', type=int, help='Limit number of final clips to render', default=None)
+    
+    args = parser.parse_args()
+    
+    os.makedirs(TEMP_DIR, exist_ok=True)
+    os.makedirs(OUTPUT_DIR, exist_ok=True)
+    os.makedirs("rules", exist_ok=True)
+    
+    if args.rule_profile:
+        rules_path = os.path.join("rules", args.rule_profile, "rules.json")
+        if not os.path.exists(rules_path):
+            print(f"❌ Error: Rules profile '{args.rule_profile}' not found at {rules_path}")
+            sys.exit(1)
+    
+    try:
+        run_full_pipeline(args.video_url, args.rule_profile, args.rerun, args.clean, args.limit)
+    except Exception as e:
+        import traceback
+        print(f"❌ Pipeline failed: {e}")
+        traceback.print_exc()
+        sys.exit(1)
