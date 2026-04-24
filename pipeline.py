@@ -53,6 +53,77 @@ def words_to_srt(words):
     return '\n'.join(srt_lines)
 
 
+def filter_words_to_clip(words, edit_result):
+    """
+    Filter words to only include those in final clip, adjusting timestamps.
+    Removes filler words and applies trim boundaries.
+    """
+    if not words:
+        return []
+    
+    indices_to_remove = set(edit_result.get('word_indices_to_remove', []))
+    trim_start = edit_result.get('trim_start_index', 0)
+    trim_end = edit_result.get('trim_end_index', len(words))
+    
+    kept = []
+    for i, w in enumerate(words):
+        if i < trim_start or i >= trim_end:
+            continue
+        if i in indices_to_remove:
+            continue
+        
+        kept.append({
+            'word': w['word'],
+            'start': w['start'],
+            'end': w['end'],
+            'speaker': w.get('speaker', 0),
+            'confidence': w.get('confidence', 1.0),
+            'orig_idx': i
+        })
+    
+    if not kept:
+        return []
+    
+    for i, w in enumerate(kept):
+        removed_before = sum(
+            words[j]['end'] - words[j]['start']
+            for j in range(trim_start, w['orig_idx'])
+            if j in indices_to_remove
+        )
+        w['start'] = max(0, w['start'] - removed_before)
+        w['end'] = max(0, w['end'] - removed_before)
+    
+    offset = kept[0]['start']
+    for w in kept:
+        w['start'] = max(0, w['start'] - offset)
+        w['end'] = max(0, w['end'] - offset)
+    
+    for w in kept:
+        del w['orig_idx']
+    
+    return kept
+
+
+def truncate_words_to_video(words, video_duration, max_gap=1.0):
+    """Truncate words to not exceed video duration (fallback for legacy data)"""
+    if not words:
+        return words
+    
+    if words[-1]['end'] <= video_duration + max_gap:
+        return words
+    
+    truncated = []
+    for w in words:
+        if w['end'] > video_duration:
+            break
+        truncated.append(w)
+    
+    if not truncated:
+        return [dict(words[0], start=0, end=video_duration)]
+    
+    return truncated
+
+
 def extract_video_id(url_or_id):
     if 'youtube.com' in url_or_id or 'youtu.be' in url_or_id:
         if 'v=' in url_or_id:
@@ -323,6 +394,8 @@ def process_candidate(video_url, rule_profile, candidate, full_video_words=None,
             )
         
         import json
+        
+        clip_words = filter_words_to_clip(words, edit_result)
         metadata = {
             'candidate_id': cid,
             'hook': candidate['hook_summary'],
@@ -330,6 +403,7 @@ def process_candidate(video_url, rule_profile, candidate, full_video_words=None,
             'virality': virality,
             'viral_title': viral_title,
             'words': words,
+            'clip_words': clip_words,
             'filler_indices': edit_result['word_indices_to_remove'],
             'trim_start_index': edit_result['trim_start_index'],
             'trim_end_index': edit_result['trim_end_index']
@@ -340,11 +414,11 @@ def process_candidate(video_url, rule_profile, candidate, full_video_words=None,
         
         words_path = output_path.replace('.mp4', '_words.json')
         with open(words_path, 'w') as f:
-            json.dump({'words': words}, f, indent=2)
+            json.dump({'words': clip_words}, f, indent=2)
         
         srt_path = output_path.replace('.mp4', '.srt')
         with open(srt_path, 'w') as f:
-            f.write(words_to_srt(words))
+            f.write(words_to_srt(clip_words))
         
         save_checkpoint(video_url, f'phase5_c{cid}', {
             'output_path': output_path,
