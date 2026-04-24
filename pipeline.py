@@ -446,8 +446,6 @@ def run_full_pipeline(video_url, rule_profile, rerun=False, clean=False, limit=N
     if os.path.exists(csv_path):
         existing = pd.read_csv(csv_path)
         df = pd.concat([existing, new_rows], ignore_index=True)
-        df = df.drop_duplicates(subset=['video_id', 'clip_id'], keep='last')
-        df = df.sort_values('clip_id').reset_index(drop=True)
     else:
         df = new_rows
     df.to_csv(csv_path, index=False)
