@@ -1,4 +1,5 @@
-import subprocess, os
+import os
+import subprocess
 from yt_dlp import YoutubeDL
 from config import TEMP_DIR
 
@@ -27,23 +28,85 @@ def download_video(video_id, skip_if_exists=False):
         ydl.download([f"https://www.youtube.com/watch?v={video_id}"])
     return out
 
+
+def resolve_candidate_segments(candidate, transcript, merge_gap=0.5):
+    segments = []
+    for seg in candidate["segments"]:
+        if "-" in str(seg):
+            s_idx, e_idx = map(int, str(seg).split("-"))
+        else:
+            s_idx, e_idx = int(seg), int(seg)
+
+        for idx in range(s_idx, e_idx + 1):
+            if 0 <= idx < len(transcript):
+                segments.append((float(transcript[idx]["start"]), float(transcript[idx]["end"])))
+
+    if not segments:
+        return []
+
+    segments.sort(key=lambda x: x[0])
+    merged = []
+    cur_s, cur_e = segments[0]
+    for s, e in segments[1:]:
+        if s <= cur_e + merge_gap:
+            cur_e = max(cur_e, e)
+        else:
+            merged.append((cur_s, cur_e))
+            cur_s, cur_e = s, e
+    merged.append((cur_s, cur_e))
+
+    timeline_segments = []
+    timeline_pos = 0.0
+    for src_start, src_end in merged:
+        duration = max(src_end - src_start, 0.01)
+        timeline_segments.append({
+            "source_start": src_start,
+            "source_end": src_end,
+            "timeline_start": timeline_pos,
+            "timeline_end": timeline_pos + duration,
+        })
+        timeline_pos += duration
+
+    return timeline_segments
+
+
+def extract_candidate_audio(video_path, source_segments, candidate_id, bitrate="192k"):
+    if not source_segments:
+        raise ValueError("No source segments provided for candidate audio extraction")
+
+    audio_path = f"{TEMP_DIR}/audio_{candidate_id}.mp3"
+    n = len(source_segments)
+
+    af = []
+    for i, seg in enumerate(source_segments):
+        af.append(
+            f"[0:a]atrim=start={seg['source_start']:.6f}:end={seg['source_end']:.6f},"
+            f"asetpts=PTS-STARTPTS[a{i}]"
+        )
+
+    if n == 1:
+        af.append("[a0]anull[outa]")
+    else:
+        a_inputs = "".join([f"[a{i}]" for i in range(n)])
+        af.append(f"{a_inputs}concat=n={n}:v=0:a=1[outa]")
+
+    cmd = [
+        "ffmpeg", "-y",
+        "-i", video_path,
+        "-filter_complex", ";".join(af),
+        "-map", "[outa]",
+        "-acodec", "libmp3lame",
+        "-b:a", bitrate,
+        audio_path,
+    ]
+    subprocess.run(cmd, check=True, capture_output=True)
+    return audio_path
+
 def extract_segments(video_path, candidate, transcript, candidate_id):
     rough_cut = f"{TEMP_DIR}/rough_cut_{candidate_id}.mp4"
     audio_path = f"{TEMP_DIR}/audio_{candidate_id}.mp3"
-    segments = []
-    for seg in candidate['segments']:
-        if '-' in str(seg): s_idx, e_idx = map(int, seg.split('-'))
-        else: s_idx, e_idx = int(seg), int(seg)
-        for idx in range(s_idx, e_idx + 1):
-            if idx < len(transcript):
-                segments.append((transcript[idx]['start'], transcript[idx]['end']))
-    merged = []
-    if segments:
-        cur_s, cur_e = segments[0]
-        for s, e in segments[1:]:
-            if s <= cur_e + 0.5: cur_e = e
-            else: merged.append((cur_s, cur_e)); cur_s, cur_e = s, e
-        merged.append((cur_s, cur_e))
+    source_segments = resolve_candidate_segments(candidate, transcript)
+    merged = [(s["source_start"], s["source_end"]) for s in source_segments]
     
     # Software concat, then upload to VAAPI
     vf, af = [], []

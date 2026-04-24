@@ -53,7 +53,58 @@ def _build_keep_segments(words, edit_result):
     return keep
 
 
-def _build_filter_complex(keep, use_vaapi):
+def map_keep_to_source_segments(keep_segments, source_segments):
+    """
+    Map keep ranges from candidate timeline into source video timeline.
+    """
+    if not keep_segments:
+        return []
+    if not source_segments:
+        return [
+            {"s": float(seg["s"]), "e": float(seg["e"])}
+            for seg in keep_segments
+            if float(seg["e"]) > float(seg["s"])
+        ]
+
+    mapped = []
+    for keep in keep_segments:
+        keep_s = float(keep["s"])
+        keep_e = float(keep["e"])
+        if keep_e <= keep_s:
+            continue
+
+        for src in source_segments:
+            t_s = float(src["timeline_start"])
+            t_e = float(src["timeline_end"])
+            overlap_s = max(keep_s, t_s)
+            overlap_e = min(keep_e, t_e)
+            if overlap_e <= overlap_s:
+                continue
+
+            mapped.append(
+                {
+                    "s": float(src["source_start"]) + (overlap_s - t_s),
+                    "e": float(src["source_start"]) + (overlap_e - t_s),
+                }
+            )
+
+    if not mapped:
+        return []
+
+    merged = []
+    mapped.sort(key=lambda x: x["s"])
+    cur = mapped[0]
+    for seg in mapped[1:]:
+        if seg["s"] <= cur["e"] + 0.001:
+            cur["e"] = max(cur["e"], seg["e"])
+        else:
+            merged.append(cur)
+            cur = seg
+    merged.append(cur)
+    return merged
+
+
+def _build_filter_complex(keep, use_vaapi, decode_is_hw=False):
     n = len(keep)
     v_filters = []
     a_filters = []
@@ -74,21 +125,31 @@ def _build_filter_complex(keep, use_vaapi):
         )
 
     if n == 1:
-        v_tail = [
-            "[v0]format=nv12,hwupload=extra_hw_frames=64[vvout]"
-            if use_vaapi
-            else "[v0]format=yuv420p[vvout]"
-        ]
+        if use_vaapi:
+            if decode_is_hw:
+                v_tail = ["[v0]null[vvout]"]
+            else:
+                v_tail = ["[v0]format=nv12,hwupload=extra_hw_frames=64[vvout]"]
+        else:
+            v_tail = ["[v0]format=yuv420p[vvout]"]
         a_tail = ["[a0]loudnorm=I=-16[outa]"]
     else:
         v_inputs = "".join([f"[v{i}]" for i in range(n)])
         a_inputs = "".join([f"[a{i}]" for i in range(n)])
 
-        v_tail = [f"{v_inputs}concat=n={n}:v=1:a=0[vcat]"]
         if use_vaapi:
-            v_tail.append("[vcat]format=nv12,hwupload=extra_hw_frames=64[vvout]")
+            if decode_is_hw:
+                v_tail = [f"{v_inputs}concat=n={n}:v=1:a=0[vvout]"]
+            else:
+                v_tail = [
+                    f"{v_inputs}concat=n={n}:v=1:a=0[vcat]",
+                    "[vcat]format=nv12,hwupload=extra_hw_frames=64[vvout]",
+                ]
         else:
-            v_tail.append("[vcat]format=yuv420p[vvout]")
+            v_tail = [
+                f"{v_inputs}concat=n={n}:v=1:a=0[vcat]",
+                "[vcat]format=yuv420p[vvout]",
+            ]
 
         a_tail = [
             f"{a_inputs}concat=n={n}:v=0:a=1[acat]",
@@ -99,7 +160,7 @@ def _build_filter_complex(keep, use_vaapi):
 
 
 def render_final_video(
-    rough_cut_path,
+    input_video_path,
     words,
     edit_result,
     candidate_id,
@@ -107,22 +168,28 @@ def render_final_video(
     viral_title=None,
     video_output_dir=None,
     use_vaapi=True,
+    source_segments=None,
 ):
     output_base = video_output_dir or OUTPUT_DIR
     os.makedirs(output_base, exist_ok=True)
 
-    if not os.path.exists(rough_cut_path):
-        raise FileNotFoundError(f"Rough cut missing: {rough_cut_path}")
+    if not os.path.exists(input_video_path):
+        raise FileNotFoundError(f"Input video missing: {input_video_path}")
 
-    keep = _build_keep_segments(words, edit_result)
-    if not keep:
+    keep_timeline = _build_keep_segments(words, edit_result)
+    if not keep_timeline:
         raise ValueError("No keep segments generated from edit output")
+
+    keep = map_keep_to_source_segments(keep_timeline, source_segments)
+    if not keep:
+        raise ValueError("No source-mapped keep segments generated from edit output")
 
     clean_title = re.sub(r"[^\w\s-]", "", viral_title or "clip").strip().replace(" ", "-").lower()[:40]
     output_filename = f"cid{candidate_id}_{clean_title}.mp4"
     out = f"{output_base}/{output_filename}"
 
-    filter_complex = _build_filter_complex(keep, use_vaapi=use_vaapi)
+    decode_is_hw = use_vaapi
+    filter_complex = _build_filter_complex(keep, use_vaapi=use_vaapi, decode_is_hw=decode_is_hw)
 
     if use_vaapi:
         print("🚀 Rendering with VAAPI (h264_vaapi)")
@@ -133,8 +200,12 @@ def render_final_video(
             "vaapi=hw:/dev/dri/renderD128",
             "-filter_hw_device",
             "hw",
+            "-hwaccel",
+            "vaapi",
+            "-hwaccel_output_format",
+            "vaapi",
             "-i",
-            rough_cut_path,
+            input_video_path,
             "-filter_complex",
             filter_complex,
             "-map",
@@ -143,8 +214,18 @@ def render_final_video(
             "[outa]",
             "-c:v",
             "h264_vaapi",
-            "-qp",
-            "24",
+            "-low_power",
+            "1",
+            "-compression_level",
+            "1",
+            "-rc_mode",
+            "CQP",
+            "-global_quality",
+            "25",
+            "-bf",
+            "0",
+            "-async_depth",
+            "4",
             "-c:a",
             "aac",
             "-b:a",
@@ -159,7 +240,7 @@ def render_final_video(
             "ffmpeg",
             "-y",
             "-i",
-            rough_cut_path,
+            input_video_path,
             "-filter_complex",
             filter_complex,
             "-map",

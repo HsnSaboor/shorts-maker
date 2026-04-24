@@ -5,13 +5,15 @@ God-tier terminal interface for local video clipping
 """
 import sys
 import os
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from rich.console import Console
 from rich.panel import Panel
 from rich.table import Table
-from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TimeElapsedColumn
+from rich.progress import Progress, SpinnerColumn, TextColumn, BarColumn, TimeElapsedColumn, TaskProgressColumn
 from rich.prompt import Confirm
 from rich import print as rprint
 from yt_dlp import YoutubeDL
+import traceback as tb_module
 
 console = Console()
 
@@ -165,18 +167,75 @@ def main():
             
             render_candidates = candidates[:limit] if limit is not None else candidates
             render_count = len(render_candidates)
-            render_task = progress.add_task("[green]Rendering clips...", total=render_count)
-
-            for i, c in enumerate(render_candidates):
-                progress.update(render_task, description=f"[green]Rendering clip {i+1}/{render_count}...")
-                result = process_candidate(
-                    args.video_url,
-                    args.rule_profile,
-                    c,
-                    full_video_words=full_video_words,
-                    transcript=transcript,
-                )
-                progress.advance(render_task)
+            use_parallel = render_count > 1
+            
+            if use_parallel:
+                console.print(f"[cyan]⚙️  Parallel rendering enabled ({render_count} clips, workers=2)[/cyan]")
+            
+            task_ids = {}
+            
+            with Progress(
+                SpinnerColumn(),
+                TextColumn("[progress.description]{task.description}"),
+                BarColumn(bar_width=40),
+                TaskProgressColumn(),
+                TimeElapsedColumn(),
+                console=console,
+                transient=False,
+            ) as progress:
+                
+                render_task = progress.add_task("[green]Rendering clips...", total=render_count)
+                
+                def _run_clip(c):
+                    return process_candidate(
+                        args.video_url,
+                        args.rule_profile,
+                        c,
+                        full_video_words=full_video_words,
+                        transcript=transcript,
+                    )
+                
+                if use_parallel:
+                    with ThreadPoolExecutor(max_workers=2) as executor:
+                        futures = {
+                            executor.submit(_run_clip, c): c 
+                            for c in render_candidates
+                        }
+                        
+                        for fut in as_completed(futures):
+                            candidate = futures[fut]
+                            cid = candidate.get('candidate_id', '?')
+                            progress.update(
+                                render_task,
+                                description=f"[cyan]Rendering Candidate {cid}..."
+                            )
+                            try:
+                                result = fut.result()
+                                progress.advance(render_task)
+                            except Exception as e:
+                                progress.advance(render_task)
+                                console.print(f"[red]❌ Candidate {cid} failed: {e}[/red]")
+                else:
+                    for i, c in enumerate(render_candidates):
+                        cid = c.get('candidate_id', '?')
+                        progress.update(
+                            render_task,
+                            description=f"[green]Rendering Candidate {cid}..."
+                        )
+                        try:
+                            result = process_candidate(
+                                args.video_url,
+                                args.rule_profile,
+                                c,
+                                full_video_words=full_video_words,
+                                transcript=transcript,
+                            )
+                            progress.advance(render_task)
+                        except Exception as e:
+                            progress.advance(render_task)
+                            console.print(f"[red]❌ Candidate {cid} failed: {e}[/red]")
+                
+                progress.update(render_task, description="[bold green]✓ Complete!", completed=True)
             
             progress.update(render_task, description="[bold green]✓ Complete!", completed=True)
         

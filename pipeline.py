@@ -7,13 +7,18 @@ import sys
 import os
 import subprocess
 from concurrent.futures import ThreadPoolExecutor
+from threading import Lock
+import traceback as tb_module
 from phase1_miner import mine_candidates
 from phase2_editor import identify_fillers
-from phase3_extraction import download_video, extract_segments, create_audio_chunks
+from phase3_extraction import create_audio_chunks, resolve_candidate_segments, extract_candidate_audio
 from phase4_deepgram import transcribe_with_deepgram, merge_chunked_transcriptions
 from phase5_render import render_final_video
 from config import TEMP_DIR, OUTPUT_DIR
 from checkpoint import save_checkpoint, load_checkpoint, checkpoint_exists
+
+
+RENDER_LOCK = Lock()
 
 
 def extract_video_id(url_or_id):
@@ -131,6 +136,7 @@ def process_candidate(video_url, rule_profile, candidate, full_video_words=None,
     cid = candidate['candidate_id']
     virality = candidate.get('virality', {})
     viral_title = candidate.get('viral_title', 'Untitled')
+    source_segments = []
     
     print(f"📹 Processing Candidate {cid}: {candidate['hook_summary']}")
     print(f"   Duration: {candidate['duration']:.1f}s | Virality: {virality.get('total_score', 0)}/100")
@@ -155,23 +161,41 @@ def process_candidate(video_url, rule_profile, candidate, full_video_words=None,
     if phase2_checkpoint:
         print(f"⚡ Resuming from Phase 2 checkpoint")
         video_path = phase2_checkpoint['video_path']
-        rough_cut = phase2_checkpoint['rough_cut']
         audio_path = phase2_checkpoint['audio_path']
+        source_segments = phase2_checkpoint.get('source_segments', [])
+
+        if not source_segments:
+            source_segments = resolve_candidate_segments(candidate, transcript)
+
+        if not os.path.exists(audio_path):
+            audio_path = extract_candidate_audio(video_path, source_segments, cid)
+
+        save_checkpoint(video_url, f'phase2_c{cid}', {
+            'video_path': video_path,
+            'audio_path': audio_path,
+            'source_segments': source_segments,
+        })
     else:
-        print(f"📥 Downloading and extracting segments...")
+        print(f"📥 Preparing candidate segments and targeted audio...")
         local_video = f"{TEMP_DIR}/{video_id}.mp4"
         if os.path.exists(local_video):
             video_path = local_video
             print(f"✓ Using existing video: {video_path}")
         else:
             video_path = f"temp/{video_id}.mp4"
-        rough_cut, audio_path = extract_segments(video_path, candidate, transcript, cid)
+
+        source_segments = resolve_candidate_segments(candidate, transcript)
+        if not source_segments:
+            raise ValueError(f"No source segments found for candidate {cid}")
+
+        audio_path = extract_candidate_audio(video_path, source_segments, cid)
+
         save_checkpoint(video_url, f'phase2_c{cid}', {
             'video_path': video_path,
-            'rough_cut': rough_cut,
-            'audio_path': audio_path
+            'audio_path': audio_path,
+            'source_segments': source_segments,
         })
-        print(f"✓ Rough cut created")
+        print(f"✓ Candidate segments resolved ({len(source_segments)} source span(s))")
     
     phase3_checkpoint = load_checkpoint(video_url, f'phase3_c{cid}')
     if phase3_checkpoint:
@@ -181,8 +205,8 @@ def process_candidate(video_url, rule_profile, candidate, full_video_words=None,
     else:
         if full_video_words:
             print(f"✂️  Extracting clip words from full video transcript...")
-            from utils.transcript_utils import extract_clip_words
-            words = extract_clip_words(full_video_words, candidate, transcript)
+            from utils.transcript_utils import extract_clip_words_from_segments
+            words = extract_clip_words_from_segments(full_video_words, source_segments)
             print(f"✓ Extracted {len(words)} words from full transcript")
         else:
             audio_duration = 0
@@ -252,7 +276,17 @@ def process_candidate(video_url, rule_profile, candidate, full_video_words=None,
         print(f"✓ Loaded rendered video: {output_path}")
     else:
         print(f"🎨 Rendering final 16:9 video...")
-        output_path = render_final_video(rough_cut, words, edit_result, cid, video_id, viral_title, video_output_dir)
+        with RENDER_LOCK:
+            output_path = render_final_video(
+                video_path,
+                words,
+                edit_result,
+                cid,
+                video_id,
+                viral_title,
+                video_output_dir,
+                source_segments=source_segments,
+            )
         
         import json
         metadata = {
@@ -351,8 +385,13 @@ def run_full_pipeline(video_url, rule_profile, rerun=False, clean=False, limit=N
         print(f"📌 Limit: processing only {limit} candidate(s)")
     
     results = []
-    for candidate in candidates:
-        result = process_candidate(
+    failed_candidates = []
+    worker_count = min(2, max(1, len(candidates)))
+    if worker_count > 1:
+        print(f"⚙️  Parallel candidate processing enabled (workers={worker_count})")
+
+    def _run_candidate(candidate):
+        return process_candidate(
             video_url,
             rule_profile,
             candidate,
@@ -361,7 +400,29 @@ def run_full_pipeline(video_url, rule_profile, rerun=False, clean=False, limit=N
             rerun=rerun,
             transcript=transcript,
         )
-        results.append(result)
+
+    with ThreadPoolExecutor(max_workers=worker_count) as executor:
+        futures = {executor.submit(_run_candidate, candidate): candidate for candidate in candidates}
+        for fut in futures:
+            candidate = futures[fut]
+            try:
+                results.append(fut.result())
+            except Exception as e:
+                cid = candidate.get('candidate_id', 'unknown')
+                hook = candidate.get('hook_summary', 'unknown')
+                traceback_str = tb_module.format_exc()
+                print(f"❌ Candidate {cid} failed: {e}")
+                print(f"   Hook: {hook[:60]}...")
+                print(f"   Traceback:\n{tb_module.format_exc()}")
+                failed_candidates.append({
+                    'candidate_id': cid,
+                    'hook': hook,
+                    'error': str(e),
+                    'traceback': traceback_str,
+                })
+
+    successful = [r for r in results]
+    results.sort(key=lambda x: x['candidate_id'])
     
     # Append to global CSV
     csv_path = os.path.join(OUTPUT_DIR, "all_clips.csv")
@@ -392,9 +453,18 @@ def run_full_pipeline(video_url, rule_profile, rerun=False, clean=False, limit=N
     print("=" * 60)
     print("Pipeline Complete!")
     print("=" * 60)
-    print(f"Exported {len(results)} clips to: {csv_path}")
+    print(f"Exported {len(successful)} clips to: {csv_path}")
     for r in results:
         print(f"  {os.path.basename(r['output'])}: {r['viral_title'][:60]}...")
+    
+    if failed_candidates:
+        print("=" * 60)
+        print("❌ Failed Candidates")
+        print("=" * 60)
+        for fc in failed_candidates:
+            print(f"  [cid{fc['candidate_id']}] {fc['hook'][:50]}...")
+            print(f"     Error: {fc['error']}")
+        print(f"Total failed: {len(failed_candidates)}/{len(candidates)}")
     
     return results
 

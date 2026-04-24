@@ -40,3 +40,36 @@ def extract_clip_words(full_video_words, candidate, transcript):
     ]
     
     return clip_words
+
+
+def extract_clip_words_from_segments(full_video_words, source_segments):
+    """
+    Extract word timestamps using explicit source->timeline segment mapping.
+
+    Args:
+        full_video_words: List of word dicts with {word, start, end, speaker}
+        source_segments: List of segment dicts with
+            {source_start, source_end, timeline_start, timeline_end}
+
+    Returns:
+        List of words mapped into candidate timeline coordinates
+    """
+    if not source_segments:
+        return []
+
+    clip_words = []
+    for seg in source_segments:
+        src_start = float(seg["source_start"])
+        src_end = float(seg["source_end"])
+        timeline_start = float(seg["timeline_start"])
+
+        for w in full_video_words:
+            w_start = float(w["start"])
+            if src_start <= w_start <= src_end:
+                mapped = dict(w)
+                mapped["start"] = timeline_start + (float(w["start"]) - src_start)
+                mapped["end"] = timeline_start + (float(w["end"]) - src_start)
+                clip_words.append(mapped)
+
+    clip_words.sort(key=lambda x: x["start"])
+    return clip_words
