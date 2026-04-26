@@ -273,19 +273,16 @@ def calculate_duration(segments, transcript):
     return total
 
 def calculate_target_candidates(transcript, video_duration_seconds=None):
-    """Calculate optimal number of candidates: 1 per 5 minutes of content"""
+    """Calculate optimal number of candidates: 1 highlight reel per 15 minutes"""
     if video_duration_seconds:
         total_duration = video_duration_seconds
     else:
         total_duration = transcript[-1]['end'] if transcript else 0
     
-    minutes = total_duration / 60
+    import math
+    target = max(1, math.ceil(total_duration / 900.0))
     
-    # 1 candidate per 5 minutes, with min 3 and max 20
-    target = max(3, min(20, int(minutes / 5)))
-    
-    # Return range: target ± 2 for flexibility
-    return max(3, target - 2), min(20, target + 2)
+    return target, target
 
 def call_local_llm_miner(transcript, rules, historical_data, min_dur, max_dur, retry_context="", video_duration_seconds=None, chunk_label=""):
     """Call Local LLM API for candidate extraction with virality scoring"""
@@ -335,6 +332,21 @@ TIMING REQUIREMENTS:
 
 {retry_context}
 
+EDIT TECHNIQUE DETECTION:
+For each candidate, identify:
+
+1. COLD OPEN CLIMAX (1-2 second micro-clip):
+   - Find the most emotionally intense/shocking moment within the clip
+   - Must be a complete reaction, reveal, or statement
+   - Return exact transcript indices for this 1-2s moment
+   - If no clear climax exists, set to null
+
+2. SEAMLESS LOOP BRIDGE SENTENCE:
+   - Find a punchy sentence at the end that could loop to the beginning
+   - Must be a complete sentence that creates curiosity/continuity
+   - Return the exact sentence text and the word index where it should be split
+   - If no valid bridge sentence exists, set to null
+
 Return ONLY valid JSON:
 {{
   "candidates": [
@@ -350,12 +362,23 @@ Return ONLY valid JSON:
         "engagement_score": 16,
         "shareability_score": 17,
         "total_score": 86
+      }},
+      "cold_open_climax": {{
+        "start_index": 10,
+        "end_index": 10,
+        "text": "He made $1M in one day"
+      }},
+      "seamless_loop_bridge": {{
+        "sentence": "And that's why this strategy works every single time",
+        "split_word_index": 15,
+        "first_half": "And that's why this strategy",
+        "second_half": "works every single time"
       }}
     }}
   ]
 }}
 
-CRITICAL: total_score MUST equal sum of five subscores."""
+CRITICAL: total_score MUST equal sum of five subscores. Set cold_open_climax or seamless_loop_bridge to null if not found."""
     
     system_prompt = f"""You are an expert viral content editor. Extract {min_candidates}-{max_candidates} high-potential short-form video candidates from this transcript.
 
@@ -526,6 +549,98 @@ CRITICAL: total_score MUST equal the sum of the five subscores (clip_quality + v
     
     return parse_llm_json(content)
 
+def _enrich_with_heatmap(candidates, transcript, full_video_heatmap):
+    """Compute heatmap metrics per candidate and blend into combined score"""
+    for candidate in candidates:
+        segs = candidate.get('segments', [])
+        if not segs:
+            continue
+        
+        try:
+            if isinstance(segs[0], str) and '-' in segs[0]:
+                start_idx = int(segs[0].split('-')[0])
+            else:
+                start_idx = int(segs[0])
+            
+            if isinstance(segs[-1], str) and '-' in segs[-1]:
+                end_idx = int(segs[-1].split('-')[1])
+            else:
+                end_idx = int(segs[-1])
+            
+            clip_start = transcript[start_idx]['start']
+            clip_end = transcript[end_idx]['end']
+        except:
+            continue
+        
+        overlapping = [
+            h for h in full_video_heatmap
+            if h['end'] > clip_start and h['start'] < clip_end
+        ]
+        
+        if overlapping:
+            avg_norm = sum(h['intensity_norm'] for h in overlapping) / len(overlapping)
+            peak = max(overlapping, key=lambda h: h['intensity_norm'])
+            peak_norm = peak['intensity_norm']
+            peak_time = peak['start'] + peak['duration'] / 2.0
+        else:
+            avg_norm = 0.0
+            peak_norm = 0.0
+            peak_time = clip_start
+        
+        candidate['heatmap'] = {
+            'avg_norm': round(avg_norm, 3),
+            'peak_norm': round(peak_norm, 3),
+            'peak_time_sec': round(peak_time, 2)
+        }
+        
+        virality_score = candidate.get('virality', {}).get('total_score', 0)
+        heatmap_signal = avg_norm * 100.0
+        combined = 0.75 * virality_score + 0.25 * heatmap_signal
+        candidate['_combined_score'] = round(combined, 2)
+    
+    return candidates
+
+
+def _assign_edit_techniques(candidates, transcript):
+    """Assign edit_mode based on LLM-detected bridge sentences and climaxes"""
+    for candidate in candidates:
+        bridge = candidate.get('seamless_loop_bridge')
+        climax = candidate.get('cold_open_climax')
+        
+        if bridge and bridge.get('sentence') and bridge.get('split_word_index') is not None:
+            edit_mode = 'loop_hook'
+            cold_open_enabled = False
+            seamless_loop_enabled = True
+            cold_open_metadata = None
+            seamless_loop_metadata = bridge
+        elif climax and climax.get('start_index') is not None:
+            edit_mode = 'cold_open'
+            cold_open_enabled = True
+            seamless_loop_enabled = False
+            cold_open_metadata = climax
+            seamless_loop_metadata = None
+        else:
+            edit_mode = 'cold_open'
+            cold_open_enabled = False
+            seamless_loop_enabled = False
+            cold_open_metadata = None
+            seamless_loop_metadata = None
+        
+        candidate['edit_techniques'] = {
+            'edit_mode': edit_mode,
+            'cold_open_hook': {
+                'enabled': cold_open_enabled,
+                'metadata': cold_open_metadata
+            },
+            'seamless_loop': {
+                'enabled': seamless_loop_enabled,
+                'metadata': seamless_loop_metadata
+            }
+        }
+    
+    return candidates
+
+
 def calculate_math_engagement_score(clip_text, duration):
     """Calculate mathematical engagement score using ClippedAI formula"""
     words = clip_text.split()
@@ -546,11 +661,10 @@ def calculate_math_engagement_score(clip_text, duration):
     math_score = (word_density * 0.45) + (engagement_ratio * 0.30) + (duration_balance * 0.25)
     return math_score * 100
 
-def mine_candidates(video_id, rule_profile=None, max_retries=3, full_video_words=None, max_candidates=None, transcript=None):
+def mine_candidates(video_id, rule_profile=None, max_retries=3, full_video_words=None, max_candidates=None, transcript=None, full_video_heatmap=None):
     """Phase 1: Extract candidates with validation and virality scoring"""
     from yt_dlp import YoutubeDL
     
-    # Fetch video duration from yt-dlp
     video_duration_seconds = None
     try:
         with YoutubeDL({'quiet': True}) as ydl:
@@ -568,7 +682,6 @@ def mine_candidates(video_id, rule_profile=None, max_retries=3, full_video_words
     min_dur = config.get('min_duration', MIN_DURATION)
     max_dur = config.get('max_duration', MAX_DURATION)
     
-    # Use chunking strategy (30min/5min overlap - the winning method from experiments)
     chunks = chunk_transcript(transcript)
     print(f"📑 Split transcript into {len(chunks)} chunks ({CHUNK_SIZE_MINUTES}min/{CHUNK_OVERLAP_SECONDS}s overlap)")
     
@@ -606,21 +719,27 @@ def mine_candidates(video_id, rule_profile=None, max_retries=3, full_video_words
         except Exception as e:
             print(f"  ⚠️  Error processing chunk: {e}")
     
-    # Deduplicate
     valid_candidates = deduplicate_candidates(all_candidates, transcript)
     
     if valid_candidates:
-        valid_candidates.sort(key=lambda x: x.get('virality', {}).get('total_score', 0), reverse=True)
-        
-        # Add titles
         for candidate in valid_candidates:
             if 'viral_title' not in candidate or not candidate['viral_title']:
                 candidate['viral_title'] = candidate.get('hook_summary', 'Untitled')
-
+        
+        if full_video_heatmap:
+            valid_candidates = _enrich_with_heatmap(valid_candidates, transcript, full_video_heatmap)
+        
+        valid_candidates.sort(key=lambda x: x.get('_combined_score', x.get('virality', {}).get('total_score', 0)), reverse=True)
+        
+        target_reels, _ = calculate_target_candidates(transcript, video_duration_seconds)
         if max_candidates is not None:
-            valid_candidates = valid_candidates[:max_candidates]
-         
-        print(f"✅ Found {len(valid_candidates)} unique candidates")
+            target_reels = min(target_reels, max_candidates)
+        
+        valid_candidates = valid_candidates[:target_reels]
+        
+        valid_candidates = _assign_edit_techniques(valid_candidates, transcript)
+        
+        print(f"✅ Found {len(valid_candidates)} highlight reels (quota: {target_reels})")
         return valid_candidates, transcript, config
     
     raise Exception("Failed to extract valid candidates")

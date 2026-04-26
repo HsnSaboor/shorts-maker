@@ -160,6 +160,7 @@ def mine_phase1(video_url, rule_profile, rerun=False, limit=None):
     
     video_id = extract_video_id(video_url)
     full_video_words = None
+    full_video_heatmap = None
     
     transcript = None
     try:
@@ -167,6 +168,15 @@ def mine_phase1(video_url, rule_profile, rerun=False, limit=None):
         transcript = fetch_transcript(video_id)
     except:
         pass
+    
+    try:
+        from utils.yt_heatmap import fetch_normalized_heatmap
+        print("📊 Fetching YouTube heatmap data...")
+        full_video_heatmap = fetch_normalized_heatmap(video_id)
+        if full_video_heatmap:
+            print(f"✓ Loaded {len(full_video_heatmap)} heatmap markers")
+    except Exception as e:
+        print(f"⚠️  Heatmap fetch failed: {e}")
     
     if transcript is None:
         print("📡 YouTube transcript unavailable, using Deepgram for full video")
@@ -218,6 +228,7 @@ def mine_phase1(video_url, rule_profile, rerun=False, limit=None):
         full_video_words=full_video_words,
         max_candidates=limit,
         transcript=transcript,
+        full_video_heatmap=full_video_heatmap,
     )
     
     save_checkpoint(video_url, 'phase1', {
@@ -225,10 +236,11 @@ def mine_phase1(video_url, rule_profile, rerun=False, limit=None):
         'transcript': transcript,
         'campaign_config': campaign_config,
         'full_video_words': full_video_words,
+        'full_video_heatmap': full_video_heatmap,
         'candidate_limit': limit,
     })
     
-    print(f"✓ Found {len(candidates)} candidates")
+    print(f"✓ Found {len(candidates)} highlight reels")
     return candidates, transcript, campaign_config, full_video_words
 
 
@@ -404,6 +416,8 @@ def process_candidate(video_url, rule_profile, candidate, full_video_words=None,
             'duration': candidate['duration'],
             'virality': virality,
             'viral_title': viral_title,
+            'heatmap': candidate.get('heatmap', {}),
+            'edit_techniques': candidate.get('edit_techniques', {}),
             'words': words,
             'clip_words': clip_words,
             'filler_indices': edit_result['word_indices_to_remove'],
