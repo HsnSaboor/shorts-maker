@@ -104,7 +104,57 @@ def map_keep_to_source_segments(keep_segments, source_segments):
     return merged
 
 
-def _build_filter_complex(keep, use_vaapi, decode_is_hw=False):
+def _reorder_for_edit_mode(keep_timeline, words, edit_techniques):
+    if not edit_techniques or not keep_timeline:
+        return keep_timeline, False
+    
+    mode = edit_techniques.get('edit_mode')
+    
+    if mode == 'cold_open':
+        metadata = edit_techniques.get('cold_open_hook', {}).get('metadata')
+        if not metadata or metadata.get('start_index') is None:
+            return keep_timeline, False
+        
+        start_idx = metadata['start_index']
+        end_idx = metadata.get('end_index', start_idx)
+        
+        if start_idx >= len(words) or end_idx >= len(words):
+            return keep_timeline, False
+        
+        climax_start = words[start_idx]['start']
+        climax_end = words[end_idx]['end']
+        
+        climax_seg = {'s': climax_start, 'e': climax_end}
+        reordered = [climax_seg] + keep_timeline
+        return reordered, False
+    
+    elif mode == 'loop_hook':
+        metadata = edit_techniques.get('seamless_loop', {}).get('metadata')
+        if not metadata or metadata.get('split_word_index') is None:
+            return keep_timeline, False
+        
+        split_idx = metadata['split_word_index']
+        if split_idx >= len(words):
+            return keep_timeline, False
+        
+        split_time = words[split_idx]['start']
+        
+        first_half = [seg for seg in keep_timeline if seg['e'] <= split_time]
+        second_half = [seg for seg in keep_timeline if seg['s'] >= split_time]
+        overlap = [seg for seg in keep_timeline if seg['s'] < split_time < seg['e']]
+        
+        if overlap:
+            seg = overlap[0]
+            first_half.append({'s': seg['s'], 'e': split_time})
+            second_half.insert(0, {'s': split_time, 'e': seg['e']})
+        
+        reordered = second_half + first_half
+        return reordered, True
+    
+    return keep_timeline, False
+
+
+def _build_filter_complex(keep, use_vaapi, decode_is_hw=False, seamless_loop=False):
     n = len(keep)
     v_filters = []
     a_filters = []
@@ -118,11 +168,17 @@ def _build_filter_complex(keep, use_vaapi, decode_is_hw=False):
         v_filters.append(
             f"[0:v]trim=start={start:.6f}:end={end:.6f},setpts=PTS-STARTPTS[v{i}]"
         )
-        a_filters.append(
-            f"[0:a]atrim=start={start:.6f}:end={end:.6f},asetpts=PTS-STARTPTS,"
-            f"afade=t=in:st=0:d={FADE_DURATION:.3f},"
-            f"afade=t=out:st={fade_out_start:.6f}:d={FADE_DURATION:.3f}[a{i}]"
-        )
+        
+        if seamless_loop:
+            a_filters.append(
+                f"[0:a]atrim=start={start:.6f}:end={end:.6f},asetpts=PTS-STARTPTS[a{i}]"
+            )
+        else:
+            a_filters.append(
+                f"[0:a]atrim=start={start:.6f}:end={end:.6f},asetpts=PTS-STARTPTS,"
+                f"afade=t=in:st=0:d={FADE_DURATION:.3f},"
+                f"afade=t=out:st={fade_out_start:.6f}:d={FADE_DURATION:.3f}[a{i}]"
+            )
 
     if n == 1:
         if use_vaapi:
@@ -170,6 +226,7 @@ def render_final_video(
     use_vaapi=True,
     source_segments=None,
     unique_suffix=0,
+    edit_techniques=None,
 ):
     output_base = video_output_dir or OUTPUT_DIR
     os.makedirs(output_base, exist_ok=True)
@@ -181,6 +238,8 @@ def render_final_video(
     if not keep_timeline:
         raise ValueError("No keep segments generated from edit output")
 
+    keep_timeline, seamless_loop = _reorder_for_edit_mode(keep_timeline, words, edit_techniques)
+
     keep = map_keep_to_source_segments(keep_timeline, source_segments)
     if not keep:
         raise ValueError("No source-mapped keep segments generated from edit output")
@@ -191,7 +250,7 @@ def render_final_video(
     out = f"{output_base}/{output_filename}"
 
     decode_is_hw = use_vaapi
-    filter_complex = _build_filter_complex(keep, use_vaapi=use_vaapi, decode_is_hw=decode_is_hw)
+    filter_complex = _build_filter_complex(keep, use_vaapi=use_vaapi, decode_is_hw=decode_is_hw, seamless_loop=seamless_loop)
 
     if use_vaapi:
         print("🚀 Rendering with VAAPI (h264_vaapi)")

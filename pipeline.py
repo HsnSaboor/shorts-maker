@@ -399,12 +399,13 @@ def process_candidate(video_url, rule_profile, candidate, full_video_words=None,
                 video_path,
                 words,
                 edit_result,
-                cid,  # Now globally unique (1-18)
+                cid,
                 video_id,
                 viral_title,
                 video_output_dir,
                 source_segments=source_segments,
                 unique_suffix=0,
+                edit_techniques=candidate.get('edit_techniques'),
             )
         
         import json
