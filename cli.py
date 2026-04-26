@@ -62,17 +62,34 @@ def display_candidates(candidates, video_url, metadata=None):
     table.add_column("Hook Summary", style="white", width=40)
     table.add_column("Duration", justify="center", style="yellow")
     table.add_column("Virality", justify="center", style="green bold")
-    table.add_column("Hook Type", style="magenta")
+    table.add_column("Heatmap", justify="center", style="blue")
+    table.add_column("Edit Mode", style="magenta")
     table.add_column("Viral Title", style="yellow bold")
     
     for c in candidates:
         virality = c.get('virality', {})
+        heatmap = c.get('heatmap', {})
+        edit_tech = c.get('edit_techniques', {})
+        
+        edit_mode = edit_tech.get('edit_mode', 'standard')
+        if edit_mode == 'loop_hook':
+            loop_meta = edit_tech.get('seamless_loop', {}).get('metadata', {})
+            sentence = loop_meta.get('sentence', '')
+            edit_display = f"Loop: {sentence[:25]}..." if len(sentence) > 25 else f"Loop: {sentence}"
+        elif edit_mode == 'cold_open':
+            cold_meta = edit_tech.get('cold_open_hook', {}).get('metadata', {})
+            text = cold_meta.get('text', '') if cold_meta else ''
+            edit_display = f"Cold Open: {text[:20]}..." if len(text) > 20 else f"Cold Open: {text}" if text else "Cold Open"
+        else:
+            edit_display = "Standard"
+        
         table.add_row(
             str(c['candidate_id']),
             c.get('hook_summary', '')[:38] + '..' if len(c.get('hook_summary', '')) > 38 else c.get('hook_summary', ''),
             f"{c.get('duration', 0):.0f}s",
             f"{virality.get('total_score', 0)}/100",
-            virality.get('hook_type', 'none'),
+            f"{heatmap.get('avg_norm', 0):.2f}" if heatmap.get('avg_norm') else "N/A",
+            edit_display,
             c.get('viral_title', '')[:20]
         )
     

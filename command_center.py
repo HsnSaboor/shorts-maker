@@ -84,9 +84,10 @@ def display_job_results(job_folder: Path):
     table = Table(title=f"Results: {job_folder.name}", show_header=True, header_style="bold magenta")
     table.add_column("Candidate ID", style="cyan")
     table.add_column("Viral Title", style="green")
-    table.add_column("Virality Score", justify="right", style="yellow")
+    table.add_column("Virality", justify="right", style="yellow")
+    table.add_column("Heatmap", justify="right", style="blue")
+    table.add_column("Edit Mode", style="magenta")
     table.add_column("Duration", justify="right")
-    table.add_column("Hook", style="dim")
     
     candidates = []
     for metadata_file in metadata_files:
@@ -95,13 +96,24 @@ def display_job_results(job_folder: Path):
         
         virality_score = metadata.get('virality', {}).get('total_score', 0)
         duration = metadata.get('duration', 0)
+        heatmap = metadata.get('heatmap', {})
+        edit_tech = metadata.get('edit_techniques', {})
+        
+        edit_mode = edit_tech.get('edit_mode', 'standard')
+        if edit_mode == 'loop_hook':
+            edit_display = "Loop"
+        elif edit_mode == 'cold_open':
+            edit_display = "Cold Open"
+        else:
+            edit_display = "Standard"
         
         table.add_row(
             str(metadata['candidate_id']),
             metadata['viral_title'][:40],
             f"{virality_score}/100",
-            f"{duration:.1f}s",
-            metadata['hook'][:50]
+            f"{heatmap.get('avg_norm', 0):.2f}" if heatmap.get('avg_norm') else "N/A",
+            edit_display,
+            f"{duration:.1f}s"
         )
     
     console.print(table)
