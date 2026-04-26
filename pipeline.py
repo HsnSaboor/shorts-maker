@@ -133,7 +133,7 @@ def extract_video_id(url_or_id):
     return url_or_id
 
 
-def mine_phase1(video_url, rule_profile, rerun=False, limit=None):
+def mine_phase1(video_url, rule_profile, rerun=False, limit=None, min_clips=None, max_clips=None):
     """Execute Phase 1: Candidate mining only"""
     checkpoint_data = load_checkpoint(video_url, 'phase1')
     if checkpoint_data:
@@ -227,6 +227,8 @@ def mine_phase1(video_url, rule_profile, rerun=False, limit=None):
         rule_profile,
         full_video_words=full_video_words,
         max_candidates=limit,
+        min_clips=min_clips,
+        max_clips=max_clips,
         transcript=transcript,
         full_video_heatmap=full_video_heatmap,
     )
@@ -464,7 +466,7 @@ def process_candidate(video_url, rule_profile, candidate, full_video_words=None,
     }
 
 
-def run_full_pipeline(video_url, rule_profile, rerun=False, clean=False, limit=None, cookies_file=None):
+def run_full_pipeline(video_url, rule_profile, rerun=False, clean=False, limit=None, min_duration=None, max_duration=None, min_clips=None, max_clips=None, cookies_file=None):
     """Execute the full pipeline"""
     import pandas as pd
     from datetime import datetime
@@ -511,9 +513,19 @@ def run_full_pipeline(video_url, rule_profile, rerun=False, clean=False, limit=N
         rule_profile,
         rerun,
         limit=limit,
+        min_clips=min_clips,
+        max_clips=max_clips,
     )
     
-    # Apply limit if specified
+    if min_duration is not None or max_duration is not None:
+        original_count = len(candidates)
+        candidates = [c for c in candidates if 
+                     (min_duration is None or c.get('duration', 0) >= min_duration) and
+                     (max_duration is None or c.get('duration', 0) <= max_duration)]
+        filtered_count = original_count - len(candidates)
+        if filtered_count > 0:
+            print(f"🔍 Filtered out {filtered_count} candidates by duration")
+    
     if limit:
         candidates = candidates[:limit]
         print(f"📌 Limit: processing only {limit} candidate(s)")
@@ -616,6 +628,10 @@ if __name__ == "__main__":
     parser.add_argument('--rerun', action='store_true', help='Skip video download, reprocess from existing temp file')
     parser.add_argument('--clean', action='store_true', help='Clear checkpoints and output for this video before processing')
     parser.add_argument('-l', '--limit', type=int, help='Limit number of final clips to render', default=None)
+    parser.add_argument('--min', type=float, help='Minimum clip duration in seconds', default=None)
+    parser.add_argument('--max', type=float, help='Maximum clip duration in seconds', default=None)
+    parser.add_argument('--min-clips', type=int, help='Minimum number of clips to generate (overrides duration formula)', default=None)
+    parser.add_argument('--max-clips', type=int, help='Maximum number of clips to generate (overrides duration formula)', default=None)
     parser.add_argument('--cookies', dest='cookies_file', help='YouTube cookies file (Netscape format)', default=None)
     
     args = parser.parse_args()
@@ -631,7 +647,7 @@ if __name__ == "__main__":
             sys.exit(1)
     
     try:
-        run_full_pipeline(args.video_url, args.rule_profile, args.rerun, args.clean, args.limit, args.cookies_file)
+        run_full_pipeline(args.video_url, args.rule_profile, args.rerun, args.clean, args.limit, args.min, args.max, args.min_clips, args.max_clips, args.cookies_file)
     except Exception as e:
         import traceback
         print(f"❌ Pipeline failed: {e}")

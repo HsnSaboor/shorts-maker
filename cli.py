@@ -120,12 +120,40 @@ def main():
     parser.add_argument('video_url', help='YouTube video URL')
     parser.add_argument('--rules', dest='rule_profile', help='Rules profile name (e.g., abulayha)', default=None)
     parser.add_argument('-l', '--limit', type=int, help='Limit number of final clips to render', default=None)
+    parser.add_argument('--min', type=float, help='Minimum clip duration in seconds', default=None)
+    parser.add_argument('--max', type=float, help='Maximum clip duration in seconds', default=None)
+    parser.add_argument('--min-clips', type=int, help='Minimum number of clips to generate (overrides duration formula)', default=None)
+    parser.add_argument('--max-clips', type=int, help='Maximum number of clips to generate (overrides duration formula)', default=None)
     
     args = parser.parse_args()
     
     limit = args.limit
     if limit is not None and limit < 1:
         console.print("[bold red]❌ Error: --limit must be >= 1[/bold red]")
+        sys.exit(1)
+    
+    if args.min is not None and args.min < 0:
+        console.print("[bold red]❌ Error: --min must be >= 0[/bold red]")
+        sys.exit(1)
+    
+    if args.max is not None and args.max < 0:
+        console.print("[bold red]❌ Error: --max must be >= 0[/bold red]")
+        sys.exit(1)
+    
+    if args.min is not None and args.max is not None and args.min > args.max:
+        console.print("[bold red]❌ Error: --min cannot be greater than --max[/bold red]")
+        sys.exit(1)
+    
+    if args.min_clips is not None and args.min_clips < 1:
+        console.print("[bold red]❌ Error: --min-clips must be >= 1[/bold red]")
+        sys.exit(1)
+    
+    if args.max_clips is not None and args.max_clips < 1:
+        console.print("[bold red]❌ Error: --max-clips must be >= 1[/bold red]")
+        sys.exit(1)
+    
+    if args.min_clips is not None and args.max_clips is not None and args.min_clips > args.max_clips:
+        console.print("[bold red]❌ Error: --min-clips cannot be greater than --max-clips[/bold red]")
         sys.exit(1)
     
     os.makedirs("temp", exist_ok=True)
@@ -165,8 +193,19 @@ def main():
                 args.video_url,
                 args.rule_profile,
                 limit=limit,
+                min_clips=args.min_clips,
+                max_clips=args.max_clips,
             )
             progress.update(download_task, completed=True)
+            
+            if args.min is not None or args.max is not None:
+                original_count = len(candidates)
+                candidates = [c for c in candidates if 
+                             (args.min is None or c.get('duration', 0) >= args.min) and
+                             (args.max is None or c.get('duration', 0) <= args.max)]
+                filtered_count = original_count - len(candidates)
+                if filtered_count > 0:
+                    console.print(f"[yellow]Filtered out {filtered_count} candidates by duration[/yellow]")
             
             display_candidates(candidates, args.video_url, metadata)
             

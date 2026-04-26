@@ -272,8 +272,11 @@ def calculate_duration(segments, transcript):
                 total += transcript[idx]['end'] - transcript[idx]['start']
     return total
 
-def calculate_target_candidates(transcript, video_duration_seconds=None):
+def calculate_target_candidates(transcript, video_duration_seconds=None, min_clips=None, max_clips=None):
     """Calculate optimal number of candidates: 1 highlight reel per 15 minutes"""
+    if min_clips is not None and max_clips is not None:
+        return min_clips, max_clips
+    
     if video_duration_seconds:
         total_duration = video_duration_seconds
     else:
@@ -282,14 +285,33 @@ def calculate_target_candidates(transcript, video_duration_seconds=None):
     import math
     target = max(1, math.ceil(total_duration / 900.0))
     
+    if min_clips is not None:
+        target = max(target, min_clips)
+    if max_clips is not None:
+        target = min(target, max_clips)
+    
     return target, target
 
-def call_local_llm_miner(transcript, rules, historical_data, min_dur, max_dur, retry_context="", video_duration_seconds=None, chunk_label=""):
+def call_local_llm_miner(transcript, rules, historical_data, min_dur, max_dur, retry_context="", video_duration_seconds=None, chunk_label="", min_clips=None, max_clips=None, full_video_heatmap=None):
     """Call Local LLM API for candidate extraction with virality scoring"""
-    transcript_text = "\n".join([f"[{t['index']}] {t['text']}" for t in transcript])
+    transcript_text = "\n".join([f"[{t['index']}] ({t['start']:.1f}s - {t['end']:.1f}s) {t['text']}" for t in transcript])
     
-    min_candidates, max_candidates = calculate_target_candidates(transcript, video_duration_seconds)
+    min_candidates, max_candidates = calculate_target_candidates(transcript, video_duration_seconds, min_clips, max_clips)
     print(f"🎯 Target candidates: {min_candidates}-{max_candidates}")
+    
+    heatmap_context = ""
+    if full_video_heatmap:
+        heatmap_regions = []
+        for h in full_video_heatmap[:20]:
+            heatmap_regions.append(f"  - {h['start']:.1f}s-{h['end']:.1f}s (intensity: {h['intensity_norm']:.2f})")
+        heatmap_context = f"""
+HEATMAP DATA (YouTube Most Replayed):
+The following regions have high viewer retention/engagement:
+{chr(10).join(heatmap_regions)}
+
+IMPORTANT: Match these heatmap timestamps to the transcript timestamps provided above to find the most viral moments. Prioritize candidates that overlap with high-intensity heatmap regions.
+When a candidate overlaps with a heatmap region (intensity > 0.5), add +5 to the shareability_score.
+"""
     
     system_prompt = f"""You are an expert viral content editor. Extract {min_candidates}-{max_candidates} high-potential short-form video candidates from this transcript chunk ({chunk_label}).
 
@@ -331,6 +353,8 @@ TIMING REQUIREMENTS:
 - Segments MUST be between {min_dur}-{max_dur} seconds
 
 {retry_context}
+
+{heatmap_context}
 
 EDIT TECHNIQUE DETECTION:
 For each candidate, identify:
@@ -661,7 +685,7 @@ def calculate_math_engagement_score(clip_text, duration):
     math_score = (word_density * 0.45) + (engagement_ratio * 0.30) + (duration_balance * 0.25)
     return math_score * 100
 
-def mine_candidates(video_id, rule_profile=None, max_retries=3, full_video_words=None, max_candidates=None, transcript=None, full_video_heatmap=None):
+def mine_candidates(video_id, rule_profile=None, max_retries=3, full_video_words=None, max_candidates=None, min_clips=None, max_clips=None, transcript=None, full_video_heatmap=None):
     """Phase 1: Extract candidates with validation and virality scoring"""
     from yt_dlp import YoutubeDL
     
@@ -691,7 +715,7 @@ def mine_candidates(video_id, rule_profile=None, max_retries=3, full_video_words
         try:
             result = call_local_llm_miner(
                 chunk['transcript'], rules, historical_data, min_dur, max_dur, 
-                "", video_duration_seconds, chunk['time_range']
+                "", video_duration_seconds, chunk['time_range'], min_clips, max_clips, full_video_heatmap
             )
             
             for candidate in result.get('candidates', []):
@@ -731,15 +755,15 @@ def mine_candidates(video_id, rule_profile=None, max_retries=3, full_video_words
         
         valid_candidates.sort(key=lambda x: x.get('_combined_score', x.get('virality', {}).get('total_score', 0)), reverse=True)
         
-        target_reels, _ = calculate_target_candidates(transcript, video_duration_seconds)
+        min_target, max_target = calculate_target_candidates(transcript, video_duration_seconds, min_clips, max_clips)
         if max_candidates is not None:
-            target_reels = min(target_reels, max_candidates)
+            max_target = min(max_target, max_candidates)
         
-        valid_candidates = valid_candidates[:target_reels]
+        valid_candidates = valid_candidates[:max_target]
         
         valid_candidates = _assign_edit_techniques(valid_candidates, transcript)
         
-        print(f"✅ Found {len(valid_candidates)} highlight reels (quota: {target_reels})")
+        print(f"✅ Found {len(valid_candidates)} highlight reels (quota: {min_target}-{max_target})")
         return valid_candidates, transcript, config
     
     raise Exception("Failed to extract valid candidates")
