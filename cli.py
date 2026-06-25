@@ -26,6 +26,7 @@ def get_video_metadata(video_url):
         'quiet': True,
         'skip_download': True,
         'no_warnings': True,
+        'extractor_args': {'youtube': {'player_skip': ['pot']}},
     }
     
     try:
@@ -124,6 +125,8 @@ def main():
     parser.add_argument('--max', type=float, help='Maximum clip duration in seconds', default=None)
     parser.add_argument('--min-clips', type=int, help='Minimum number of clips to generate (overrides duration formula)', default=None)
     parser.add_argument('--max-clips', type=int, help='Maximum number of clips to generate (overrides duration formula)', default=None)
+    parser.add_argument('-y', '--yes', action='store_true', help='Skip confirmation prompt and proceed automatically')
+    parser.add_argument('--dry-run', action='store_true', help='Display candidates only, skip rendering')
     
     args = parser.parse_args()
     
@@ -180,6 +183,11 @@ def main():
             pass
     
     try:
+        from checkpoint import checkpoint_exists
+        video_id = extract_video_id(args.video_url)
+        has_checkpoint = checkpoint_exists(args.video_url, 'phase1')
+        video_exists = os.path.exists(f"temp/{video_id}.mp4")
+        
         with Progress(
             SpinnerColumn(),
             TextColumn("[progress.description]{task.description}"),
@@ -188,7 +196,9 @@ def main():
             console=console
         ) as progress:
             
-            download_task = progress.add_task("[cyan]Downloading video...", total=None)
+            if not (has_checkpoint and video_exists):
+                download_task = progress.add_task("[cyan]Downloading video...", total=None)
+            
             candidates, transcript, campaign_config, full_video_words = mine_phase1(
                 args.video_url,
                 args.rule_profile,
@@ -196,7 +206,9 @@ def main():
                 min_clips=args.min_clips,
                 max_clips=args.max_clips,
             )
-            progress.update(download_task, completed=True)
+            
+            if not (has_checkpoint and video_exists):
+                progress.update(download_task, completed=True)
             
             if args.min is not None or args.max is not None:
                 original_count = len(candidates)
@@ -213,13 +225,26 @@ def main():
                 console.print("[bold red]❌ No valid candidates found![/bold red]")
                 sys.exit(1)
             
-            proceed = Confirm.ask(
-                "\n[bold yellow]Do you want to proceed with rendering these clips?[/bold yellow]"
-            )
-            
-            if not proceed:
-                console.print("[bold blue]👋 Cancelled. Run again when ready.[/bold blue]")
+            if args.dry_run:
+                console.print("\n[bold cyan]📁 Output Files:[/bold cyan]")
+                render_candidates = candidates[:limit] if limit is not None else candidates
+                for candidate in render_candidates:
+                    cid = candidate['candidate_id']
+                    output_file = f"output/{video_id}_clip_{cid}.mp4"
+                    exists = "✓" if os.path.exists(output_file) else "✗"
+                    console.print(f"  {exists} {output_file}")
+                console.print(f"\n[dim]Output directory: output/[/dim]")
+                console.print("[bold blue]👋 Dry-run mode: skipping render.[/bold blue]")
                 sys.exit(0)
+            
+            if not args.yes:
+                proceed = Confirm.ask(
+                    "\n[bold yellow]Do you want to proceed with rendering these clips?[/bold yellow]"
+                )
+                
+                if not proceed:
+                    console.print("[bold blue]👋 Cancelled. Run again when ready.[/bold blue]")
+                    sys.exit(0)
             
             render_candidates = candidates[:limit] if limit is not None else candidates
             render_count = len(render_candidates)

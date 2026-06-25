@@ -28,8 +28,10 @@ def download_video(video_id, skip_if_exists=False, cookies_file=None):
         'outtmpl': out, 
         'merge_output_format': 'mp4', 
         'quiet': True,
+        'no_warnings': True,
         'verbose': False,
-        'remote_components': 'ejs:npm',
+        'remote_components': 'ejs:github',
+        'extractor_args': {'youtube': {'player_skip': ['pot']}},
     }
     if cookies_file and os.path.exists(cookies_file):
         opts['cookiefile'] = cookies_file
@@ -132,10 +134,8 @@ def extract_segments(video_path, candidate, transcript, candidate_id):
     vf.append(f"{v_con}concat=n={n}:v=1:a=0,format=nv12,hwupload[vvout]")
     af.append(f"{a_con}concat=n={n}:v=0:a=1[outa]")
 
-    # FFmpeg 8 fix: init_hw_device + filter_hw_device
     cmd = ["ffmpeg", "-y",
-           "-init_hw_device", "vaapi=hw:/dev/dri/renderD128",
-           "-filter_hw_device", "hw",
+           "-vaapi_device", "/dev/dri/renderD128",
            "-i", video_path,
            "-filter_complex", ";".join(vf + af),
            "-map", "[vvout]", "-map", "[outa]",

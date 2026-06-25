@@ -67,14 +67,15 @@ Be conservative - only flag words that truly disrupt flow."""
         headers["Authorization"] = f"Bearer {LOCAL_LLM_API_KEY}"
     
     try:
-        response = httpx.post(LOCAL_LLM_URL, json=payload, headers=headers, timeout=30.0)
+        response = httpx.post(LOCAL_LLM_URL, json=payload, headers=headers, timeout=120.0)
         response.raise_for_status()
     except httpx.HTTPStatusError as e:
         print(f"⚠️  LLM error: {e.response.text}")
         raise
     
     result = response.json()
-    text = result['choices'][0]['message']['content'].strip()
+    msg_content = result['choices'][0]['message']
+    text = (msg_content.get('content') or msg_content.get('reasoning', '')).strip()
     
     parsed = parse_llm_json(text)
     if not parsed:

@@ -14,7 +14,9 @@ from phase2_editor import identify_fillers
 from phase3_extraction import create_audio_chunks, resolve_candidate_segments, extract_candidate_audio
 from phase4_deepgram import transcribe_with_deepgram, merge_chunked_transcriptions
 from phase5_render import render_final_video
-from config import TEMP_DIR, OUTPUT_DIR
+from config import (
+    TEMP_DIR, OUTPUT_DIR,
+)
 from checkpoint import save_checkpoint, load_checkpoint, checkpoint_exists
 
 
@@ -396,6 +398,7 @@ def process_candidate(video_url, rule_profile, candidate, full_video_words=None,
         print(f"✓ Loaded rendered video: {output_path}")
     else:
         print(f"🎨 Rendering final 16:9 video...")
+        use_vaapi = True
         with RENDER_LOCK:
             output_path = render_final_video(
                 video_path,
@@ -405,6 +408,7 @@ def process_candidate(video_url, rule_profile, candidate, full_video_words=None,
                 video_id,
                 viral_title,
                 video_output_dir,
+                use_vaapi=use_vaapi,
                 source_segments=source_segments,
                 unique_suffix=0,
                 edit_techniques=candidate.get('edit_techniques'),
@@ -446,6 +450,8 @@ def process_candidate(video_url, rule_profile, candidate, full_video_words=None,
         
         print(f"✓ Rendered: {output_path}")
         print(f"✓ Exported metadata: {metadata_path}")
+
+    # Phase 6: (disabled — vertical face-tracked crop removed)
     
     clip_transcript = ' '.join([
         transcript[seg]['text'] if isinstance(seg, int) 
@@ -462,7 +468,7 @@ def process_candidate(video_url, rule_profile, candidate, full_video_words=None,
         'virality': virality,
         'viral_title': viral_title,
         'transcript': clip_transcript,
-        'output': output_path
+        'output': output_path,
     }
 
 
@@ -495,7 +501,7 @@ def run_full_pipeline(video_url, rule_profile, rerun=False, clean=False, limit=N
         clear_checkpoints(video_url)
     
     # Get video title
-    ydl_opts = {'quiet': True}
+    ydl_opts = {'quiet': True, 'no_warnings': True}
     if cookies_file and os.path.exists(cookies_file):
         ydl_opts['cookiefile'] = cookies_file
         print(f"Using cookies from: {cookies_file}")

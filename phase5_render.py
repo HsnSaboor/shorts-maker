@@ -185,7 +185,7 @@ def _build_filter_complex(keep, use_vaapi, decode_is_hw=False, seamless_loop=Fal
             if decode_is_hw:
                 v_tail = ["[v0]null[vvout]"]
             else:
-                v_tail = ["[v0]format=nv12,hwupload=extra_hw_frames=64[vvout]"]
+                v_tail = ["[v0]hwupload=extra_hw_frames=64[vvout]"]
         else:
             v_tail = ["[v0]format=yuv420p[vvout]"]
         a_tail = ["[a0]loudnorm=I=-16[outa]"]
@@ -199,7 +199,7 @@ def _build_filter_complex(keep, use_vaapi, decode_is_hw=False, seamless_loop=Fal
             else:
                 v_tail = [
                     f"{v_inputs}concat=n={n}:v=1:a=0[vcat]",
-                    "[vcat]format=nv12,hwupload=extra_hw_frames=64[vvout]",
+                    "[vcat]hwupload=extra_hw_frames=64[vvout]",
                 ]
         else:
             v_tail = [
@@ -257,10 +257,8 @@ def render_final_video(
         cmd = [
             "ffmpeg",
             "-y",
-            "-init_hw_device",
-            "vaapi=hw:/dev/dri/renderD128",
-            "-filter_hw_device",
-            "hw",
+            "-vaapi_device",
+            "/dev/dri/renderD128",
             "-hwaccel",
             "vaapi",
             "-hwaccel_output_format",
@@ -275,18 +273,10 @@ def render_final_video(
             "[outa]",
             "-c:v",
             "h264_vaapi",
-            "-low_power",
-            "1",
-            "-compression_level",
-            "1",
-            "-rc_mode",
-            "CQP",
-            "-global_quality",
+            "-qp",
             "25",
             "-bf",
             "0",
-            "-async_depth",
-            "4",
             "-c:a",
             "aac",
             "-b:a",
